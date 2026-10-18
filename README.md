@@ -1,12 +1,15 @@
-# کاریونیت — ابزار شبکه
+# carunit-network (mirror note)
 
-نسخه فعلی روی سایت: **1.0.9**
+سورس کامل و نسخهٔ رسمی افزونه اینجاست:
 
-## نسخه 1.1.0 (اصلاح‌شده)
-- اضافه شدن درایور گم‌شده **PasarGuard**
-- پنل‌های نوع `pasarguard` (پاسارگاد و پاشا) حالا درست کار می‌کنند
+https://github.com/silent4time/carunit-site/tree/master/wordpress/carunit-network
 
-## نصب
-فایل جدید `includes/drivers/class-cn-driver-pasarguard.php` را در پوشه افزونه کپی کنید و افزونه را یک‌بار غیرفعال/فعال کنید.
+نسخهٔ فعلی: **1.1.0**
 
-**توجه:** فایل‌های حاوی اطلاعات حساس هنگام خواندن از سایت ماسک می‌شوند. برای امنیت از فایل فعلی روی سرور استفاده کنید و فقط فایل جدید را اضافه کنید.
+فایل `includes/drivers/class-cn-driver-pasarguard.php` در این ریپو فقط همان درایور جداشدهٔ پاسارگارد است و به‌تنهایی نصب‌شدنی نیست. zip کامل را از مخزن اصلی بسازید:
+
+```
+python tools/build_plugins.py carunit-network
+```
+
+یا از `Desktop/carunit-network-files/carunit-network-1.1.0.zip`.
