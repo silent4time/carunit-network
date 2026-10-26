@@ -23,6 +23,8 @@ class CN_Polban {
         if (!isset($_POST['cn_polban_url']) && !isset($_POST['cn_polban_key'])) {
             return;
         }
+        // Same nonce as the settings form (CN_Admin::form_open('save_settings')).
+        check_admin_referer('cn_save_settings');
         if (isset($_POST['cn_polban_url'])) {
             update_option('cn_polban_url', esc_url_raw(wp_unslash($_POST['cn_polban_url'])));
         }

@@ -97,7 +97,11 @@ class CN_Http {
     /** Short human message for a failed response. */
     public static function error_text(array $r) {
         if ($r['error'] !== '') {
-            return $r['error'];
+            $e = $r['error'];
+            if (preg_match('/timed?\s*out|cURL error 28|Connection timed out|Failed to connect/i', $e)) {
+                return 'سرور سایت به آدرس پنل نرسید (timeout یا قطع شبکه). آدرس را از روی همین هاست باز کنید یا فایروال پنل/هاست را بررسی کنید.';
+            }
+            return $e;
         }
         $j = is_array($r['json']) ? $r['json'] : array();
         foreach (array('detail', 'msg', 'message', 'error') as $k) {
@@ -108,4 +112,3 @@ class CN_Http {
         return 'HTTP ' . $r['code'];
     }
 }
-

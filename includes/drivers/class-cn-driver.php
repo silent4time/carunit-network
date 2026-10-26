@@ -184,9 +184,10 @@ abstract class CN_Driver {
      * Proxy the request through Polban /v1/proxy
      */
     protected function proxy_via_polban($method, $target_url, array $o, $polban_url, $polban_key) {
-        $headers = isset($o['headers']) ? $o['headers'] : array();
+        $headers = isset($o['headers']) && is_array($o['headers']) ? $o['headers'] : array();
         // Mirror CN_Http::request(): bearer/auth/cookies only become headers there,
         // so they must be added here or Polban forwards the request without them.
+        // Custom headers (X-API-KEY, Hiddify-API-Key, ...) pass through unchanged.
         if (!isset($headers['Accept'])) {
             $headers['Accept'] = 'application/json';
         }
@@ -201,7 +202,7 @@ abstract class CN_Driver {
             foreach ((array) $o['cookies'] as $name => $value) {
                 if (is_object($value) && isset($value->name)) {
                     $pairs[] = $value->name . '=' . $value->value;
-                } elseif (!is_object($value)) {
+                } elseif (!is_object($value) && !is_array($value)) {
                     $pairs[] = $name . '=' . $value;
                 }
             }
@@ -222,6 +223,8 @@ abstract class CN_Driver {
             $body = $o['body'];
         }
 
+        // Polban /v1/proxy accepts only method, url, headers and body. SSL verification
+        // and redirects are fixed on the Polban side (config verify_ssl, never follows redirects).
         $proxy_payload = array(
             'method'  => strtoupper($method),
             'url'     => $target_url,
@@ -243,22 +246,52 @@ abstract class CN_Driver {
 
         $res = CN_Http::request('POST', $polban_url . '/v1/proxy', $proxy_args);
 
-        // Unwrap Polban response (uses "code" not "status")
-        if (!empty($res['ok']) && is_array($res['json']) && isset($res['json']['code']) && isset($res['json']['body'])) {
-            $body = (string) $res['json']['body'];
-            $decoded = json_decode($body, true);
+        // Unwrap Polban response (uses "code" not "status"). Polban answers 502 with
+        // code/error when the upstream is unreachable; surface that error as-is.
+        $j = is_array($res['json']) ? $res['json'] : null;
+        if ($j !== null && isset($j['code']) && (isset($j['body']) || !empty($j['error']))) {
+            $pbody = isset($j['body']) ? (string) $j['body'] : '';
+            $decoded = json_decode($pbody, true);
+            $code = (int) $j['code'];
+            $error = isset($j['error']) ? (string) $j['error'] : '';
+            $rh = isset($j['headers']) && is_array($j['headers']) ? array_change_key_case($j['headers'], CASE_LOWER) : array();
             return array(
-                'code'    => (int) $res['json']['code'],
-                'body'    => $body,
-                'headers' => isset($res['json']['headers']) ? (array) $res['json']['headers'] : array(),
-                'error'   => isset($res['json']['error']) ? (string) $res['json']['error'] : '',
-                'ok'      => ((int) $res['json']['code'] >= 200 && (int) $res['json']['code'] < 300),
+                'code'    => $code,
+                'body'    => $pbody,
+                'headers' => $rh,
+                'error'   => $error,
+                'ok'      => $error === '' && $code >= 200 && $code < 300,
                 'json'    => is_array($decoded) ? $decoded : null,
-                'cookies' => array(),
+                'cookies' => self::parse_set_cookie(isset($rh['set-cookie']) ? $rh['set-cookie'] : array()),
             );
         }
 
         return $res;
+    }
+
+    /**
+     * Set-Cookie header value(s) -> name => value map (same shape CN_Http::request returns).
+     * Note: Polban flattens response headers into a map, so only the last Set-Cookie line survives.
+     */
+    protected static function parse_set_cookie($raw) {
+        $out = array();
+        foreach ((array) $raw as $line) {
+            $line = (string) $line;
+            // A folded multi-cookie value: split on commas that start a new name=value pair.
+            foreach (preg_split('/,\s*(?=[^;,\s]+=)/', $line) as $one) {
+                $first = trim(strtok($one, ';'));
+                if ($first === '' || strpos($first, '=') === false) {
+                    continue;
+                }
+                list($n, $v) = explode('=', $first, 2);
+                $n = trim($n);
+                if ($n === '' || in_array(strtolower($n), array('expires', 'path', 'domain', 'max-age', 'samesite'), true)) {
+                    continue;
+                }
+                $out[$n] = trim($v);
+            }
+        }
+        return $out;
     }
 
     protected function ok(array $extra = array()) {
