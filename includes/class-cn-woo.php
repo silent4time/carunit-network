@@ -9,6 +9,14 @@ class CN_Woo {
     const ITEM_RENEWED = '_cn_renewed';
     const ITEM_ERROR   = '_cn_error';
     const ORDER_FAILED = '_cn_failed';
+    const ORDER_MAILED = '_cn_mailed_services';
+    const ORDER_RETRY  = '_cn_retry_attempt';
+    const ITEM_TRY_USER = '_cn_try_user';
+    const AS_GROUP     = 'carunit-network';
+    const READY_NOTE   = 'ابزار شبکه: سرویس شما آماده شد';
+
+    /** Retry delays after a failed delivery (seconds): 2, 10, 30 minutes. */
+    public static $retry_delays = array(120, 600, 1800);
 
     public static function init() {
         add_action('woocommerce_product_options_general_product_data', array(__CLASS__, 'product_field'));
@@ -22,9 +30,15 @@ class CN_Woo {
         add_action('woocommerce_check_cart_items', array(__CLASS__, 'check_cart'));
         add_action('woocommerce_checkout_create_order_line_item', array(__CLASS__, 'order_item_meta'), 10, 4);
 
-        add_action('woocommerce_order_status_processing', array(__CLASS__, 'deliver'), 20);
-        add_action('woocommerce_order_status_completed', array(__CLASS__, 'deliver'), 20);
-        add_action('woocommerce_payment_complete', array(__CLASS__, 'deliver'), 20);
+        // Priority 5: before WC_Emails (priority 10 on the same status hook) builds the customer email.
+        add_action('woocommerce_order_status_processing', array(__CLASS__, 'deliver_on_status'), 5, 2);
+        add_action('woocommerce_order_status_completed', array(__CLASS__, 'deliver_on_status'), 5, 2);
+        add_action('woocommerce_payment_complete', array(__CLASS__, 'deliver'), 5);
+        add_action('cn_retry_delivery', array(__CLASS__, 'retry_delivery'));
+        add_action('cn_send_ready_mail', array(__CLASS__, 'send_ready_mail'));
+        add_action('woocommerce_email_order_details', array(__CLASS__, 'record_mailed'), 100, 4);
+        add_filter('woocommerce_email_classes', array(__CLASS__, 'email_classes'));
+        add_filter('woocommerce_email_enabled_customer_note', array(__CLASS__, 'skip_ready_note_email'), 10, 3);
         add_action('woocommerce_order_status_cancelled', array(__CLASS__, 'on_cancel'));
         add_action('woocommerce_order_status_refunded', array(__CLASS__, 'on_cancel'));
 
@@ -265,7 +279,7 @@ class CN_Woo {
         }
         $order_id = $order->get_id();
         if (!CN_Util::lock('order_' . $order_id, 300)) {
-            return array('created' => 0, 'renewed' => 0);
+            return array('created' => 0, 'renewed' => 0, 'locked' => true);
         }
         try {
             $any = false;
@@ -333,8 +347,15 @@ class CN_Woo {
                 $order->add_order_note('ابزار شبکه: تحویل بخشی از سفارش ناموفق بود؛ جزئیات در گزارش افزونه. از «عملیات سفارش» می‌توانید دوباره تلاش کنید.');
             } else {
                 $order->delete_meta_data(self::ORDER_FAILED);
+                $order->delete_meta_data(self::ORDER_RETRY);
             }
             $order->save();
+            if ($failed) {
+                self::schedule_retry($order);
+            }
+            if ($created || $renewed) {
+                self::queue_ready_mail($order_id);
+            }
             if (!$failed && $all_ours && $order->has_status('processing') && CN_Util::setting('auto_complete', '1') === '1') {
                 $order->update_status('completed', 'ابزار شبکه: تحویل کامل شد.');
             }
@@ -436,6 +457,189 @@ class CN_Woo {
         return $fresh && $fresh->has_status('completed') && CN_Services::for_order($order->get_id()) ? false : $enabled;
     }
 
+    /* ---------- delivery timing, retry, late mail ---------- */
+
+    /** Status hooks pass ($order_id, $order): use that same object so the email built next sees fresh item meta. */
+    public static function deliver_on_status($order_id, $order = null) {
+        return self::deliver($order instanceof WC_Order ? $order : $order_id);
+    }
+
+    private static function as_ok() {
+        return function_exists('as_schedule_single_action');
+    }
+
+    /** Hook currently running as a scheduled action (its own in-progress entry must not block rescheduling). */
+    private static $running = array();
+
+    private static function schedule($delay, $hook, $order_id) {
+        $args = array('order_id' => (int) $order_id);
+        if (self::as_ok()) {
+            if (empty(self::$running[$hook]) && function_exists('as_has_scheduled_action') && as_has_scheduled_action($hook, $args, self::AS_GROUP)) {
+                return false;
+            }
+            as_schedule_single_action(time() + $delay, $hook, $args, self::AS_GROUP);
+            return true;
+        }
+        if (wp_next_scheduled($hook, $args)) {
+            return false;
+        }
+        wp_schedule_single_event(time() + $delay, $hook, $args);
+        return true;
+    }
+
+    /** Schedule the next automatic retry (2, 10, 30 min); counter in _cn_retry_attempt. */
+    public static function schedule_retry($order) {
+        $n = (int) $order->get_meta(self::ORDER_RETRY);
+        if ($n >= count(self::$retry_delays)) {
+            return false;
+        }
+        if (self::schedule(self::$retry_delays[$n], 'cn_retry_delivery', $order->get_id())) {
+            $order->add_order_note(sprintf('ابزار شبکه: تلاش خودکار %s از %s برای %s دقیقهٔ دیگر زمان‌بندی شد.', CN_Util::fa_digits($n + 1), CN_Util::fa_digits(count(self::$retry_delays)), CN_Util::fa_digits(self::$retry_delays[$n] / 60)));
+            return true;
+        }
+        return false;
+    }
+
+    public static function retry_delivery($order_id) {
+        $order_id = is_array($order_id) ? (int) reset($order_id) : (int) $order_id;
+        self::$running['cn_retry_delivery'] = true;
+        try {
+            self::run_retry($order_id);
+        } finally {
+            unset(self::$running['cn_retry_delivery']);
+        }
+    }
+
+    private static function run_retry($order_id) {
+        $order = wc_get_order($order_id);
+        if (!$order || !$order->is_paid() || !$order->get_meta(self::ORDER_FAILED) || $order->has_status(array('cancelled', 'refunded', 'failed'))) {
+            return;
+        }
+        if (CN_Util::is_locked('order_' . $order_id)) {
+            // Another delivery is running: try again shortly without spending an attempt.
+            self::schedule(60, 'cn_retry_delivery', $order_id);
+            return;
+        }
+        $order->update_meta_data(self::ORDER_RETRY, (int) $order->get_meta(self::ORDER_RETRY) + 1);
+        $order->save();
+        self::deliver($order);
+    }
+
+    /** Service ids already shown to the customer in an email. */
+    public static function mailed_ids($order) {
+        $v = $order->get_meta(self::ORDER_MAILED);
+        return array_values(array_unique(array_map('intval', is_array($v) ? $v : array())));
+    }
+
+    public static function mark_mailed($order, array $ids) {
+        $all = array_values(array_unique(array_merge(self::mailed_ids($order), array_map('intval', $ids))));
+        $order->update_meta_data(self::ORDER_MAILED, $all);
+        $order->save_meta_data();
+    }
+
+    /** Email ids that show the service block (email_block, or the unified snippet when it replaced email_block). */
+    public static function service_email_ids() {
+        $ids = array('customer_completed_order', 'customer_invoice', 'cn_service_ready');
+        return apply_filters('cn_service_email_ids', $ids);
+    }
+
+    /** Record which services a customer email showed, whoever rendered them. */
+    public static function record_mailed($order, $sent_to_admin = false, $plain_text = false, $email = null) {
+        if ($sent_to_admin || !$order instanceof WC_Order || !is_object($email) || empty($email->id)) {
+            return;
+        }
+        $block = has_action('woocommerce_email_after_order_table', array(__CLASS__, 'email_block')) !== false;
+        $is_customer = method_exists($email, 'is_customer_email') ? $email->is_customer_email() : strpos($email->id, 'customer_') === 0;
+        if (!($block && $is_customer) && !in_array($email->id, self::service_email_ids(), true)) {
+            return;
+        }
+        $ids = array();
+        foreach (self::order_services($order) as $s) {
+            $ids[] = (int) $s[0]['id'];
+        }
+        if ($ids) {
+            self::mark_mailed($order, $ids);
+        }
+    }
+
+    /** Services of this order that no email has shown yet. */
+    public static function unmailed_services($order) {
+        $seen = self::mailed_ids($order);
+        $out = array();
+        foreach (self::order_services($order) as $s) {
+            if (!in_array((int) $s[0]['id'], $seen, true)) {
+                $out[] = $s;
+            }
+        }
+        return $out;
+    }
+
+    /** Async "service ready" email, a minute later so a same-request status email can record first. */
+    public static function queue_ready_mail($order_id) {
+        return self::schedule(60, 'cn_send_ready_mail', $order_id);
+    }
+
+    public static function send_ready_mail($order_id) {
+        $order_id = is_array($order_id) ? (int) reset($order_id) : (int) $order_id;
+        if (!CN_Util::lock('ready_mail_' . $order_id, 120)) {
+            self::$running['cn_send_ready_mail'] = true;
+            self::schedule(60, 'cn_send_ready_mail', $order_id);
+            unset(self::$running['cn_send_ready_mail']);
+            return false;
+        }
+        try {
+            $order = wc_get_order($order_id);
+            if (!$order || !$order->is_paid() || $order->has_status(array('cancelled', 'refunded', 'failed'))) {
+                return false;
+            }
+            $new = self::unmailed_services($order);
+            if (!$new) {
+                return false;
+            }
+            $ids = array();
+            foreach ($new as $s) {
+                $ids[] = (int) $s[0]['id'];
+            }
+            self::mark_mailed($order, $ids);
+            $sent = false;
+            if (function_exists('WC') && WC()->mailer()) {
+                $emails = WC()->mailer()->get_emails();
+                if (isset($emails['CN_Email_Service_Ready'])) {
+                    $sent = (bool) $emails['CN_Email_Service_Ready']->trigger($order_id, $order, $new);
+                }
+            }
+            $names = array();
+            foreach ($new as $s) {
+                $names[] = $s[0]['username'];
+            }
+            $order->add_order_note(self::READY_NOTE . ' (' . implode('، ', $names) . ')؛ اطلاعات اتصال در «سرویس‌های من» در حساب کاربری شماست.', 1, false);
+            if ($sent) {
+                $order->add_order_note('ابزار شبکه: ایمیل «سرویس شما آماده شد» برای مشتری ارسال شد.');
+            }
+            return $sent;
+        } finally {
+            CN_Util::unlock('ready_mail_' . $order_id);
+        }
+    }
+
+    /** The ready note is a customer note for the order page; the ready email already informs, so skip WC's note email. */
+    public static function skip_ready_note_email($enabled, $order = null, $email = null) {
+        if ($enabled && is_object($email) && isset($email->customer_note) && strpos((string) $email->customer_note, self::READY_NOTE) === 0) {
+            return false;
+        }
+        return $enabled;
+    }
+
+    public static function email_classes($emails) {
+        if (class_exists('WC_Email') && !class_exists('CN_Email_Service_Ready')) {
+            require_once CN_DIR . 'includes/class-cn-email-ready.php';
+        }
+        if (class_exists('CN_Email_Service_Ready')) {
+            $emails['CN_Email_Service_Ready'] = new CN_Email_Service_Ready();
+        }
+        return $emails;
+    }
+
     /* ---------- admin order screen ---------- */
 
     public static function order_actions($actions, $order = null) {
@@ -450,13 +654,11 @@ class CN_Woo {
             $order->add_order_note('ابزار شبکه: سفارش هنوز پرداخت‌شده نیست؛ تحویل انجام نشد.');
             return;
         }
-        $was_completed = $order->has_status('completed');
         $r = self::deliver($order);
-        $auto_completed = !$was_completed && $order->has_status('completed');
-        if (($r['created'] || $r['renewed']) && !$auto_completed && function_exists('WC') && WC()->mailer()) {
-            WC()->mailer()->customer_invoice($order);
-            $order->add_order_note('ابزار شبکه: ایمیل اطلاعات سرویس برای مشتری ارسال شد.');
+        if (!empty($r['locked'])) {
+            $order->add_order_note('ابزار شبکه: تحویل این سفارش همین حالا در حال انجام است؛ چند دقیقهٔ دیگر دوباره بررسی کنید.');
         }
+        // A "service ready" email (deduped by _cn_mailed_services) is queued by deliver() when something was made.
     }
 
     public static function meta_box() {

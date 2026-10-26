@@ -13,6 +13,8 @@ if (!defined('ABSPATH')) {
  * info()   returns: ok, status, used, limit, expire (ts|0), online, sub_url, configs
  */
 abstract class CN_Driver {
+    const POLBAN_TIMEOUT = 35;
+
     /** @var array */
     protected $panel;
 
@@ -40,6 +42,11 @@ abstract class CN_Driver {
 
     public static function supports($op) {
         return in_array($op, static::caps(), true);
+    }
+
+    /** Driver implements find_created() (look up a user a timed-out create may have made). */
+    public static function can_find() {
+        return false;
     }
 
     public static function uses_url() {
@@ -240,7 +247,8 @@ abstract class CN_Driver {
                 'Content-Type' => 'application/json',
             ),
             'json'    => $proxy_payload,
-            'timeout' => isset($o['timeout']) ? $o['timeout'] : 30,
+            // Longer than Polban's own upstream timeout (25s) so its 502 error arrives instead of a local timeout.
+            'timeout' => max(self::POLBAN_TIMEOUT, isset($o['timeout']) ? (int) $o['timeout'] : 0),
             'verify'  => true,
         );
 

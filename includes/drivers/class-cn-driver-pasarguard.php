@@ -47,6 +47,10 @@ class CN_Driver_Pasarguard extends CN_Driver_Marzban {
 
     /** Enabled groups: id => name; null when this admin cannot list groups. */
     protected function groups() {
+        $cached = $this->cache_get('groups');
+        if (is_array($cached)) {
+            return $cached;
+        }
         $r = $this->api('GET', '/api/groups');
         if (!$r['ok']) {
             $r = $this->api('GET', '/api/groups/simple');
@@ -69,6 +73,7 @@ class CN_Driver_Pasarguard extends CN_Driver_Marzban {
             }
             $out[(int) $g['id']] = isset($g['name']) ? (string) $g['name'] : '';
         }
+        $this->cache_set('groups', $out, 10 * MINUTE_IN_SECONDS);
         return $out;
     }
 
@@ -84,6 +89,7 @@ class CN_Driver_Pasarguard extends CN_Driver_Marzban {
         if (empty($r['ok'])) {
             return $r;
         }
+        $this->cache_del('groups');
         $groups = $this->groups();
         if ($groups === null) {
             $r['msg'] .= ' این ادمین اجازهٔ دیدن گروه‌ها را ندارد؛ شناسهٔ گروه‌ها را دستی در تنظیمات پنل وارد کنید.';

@@ -218,6 +218,33 @@ class CN_Driver_Marzban extends CN_Driver {
         return $this->api('GET', '/api/user/' . rawurlencode($username));
     }
 
+    /**
+     * Account a timed-out create may have made: same shape as create(), or ['ok'=>false,'missing'=>true] on 404.
+     * Any other failure is returned as-is so the caller does not create a duplicate.
+     */
+    public static function can_find() {
+        return static::class === 'CN_Driver_Marzban' || static::class === 'CN_Driver_Pasarguard';
+    }
+
+    public function find_created($username, array $a = array()) {
+        $r = $this->get_user($username);
+        if ($r['code'] === 404) {
+            return array('ok' => false, 'missing' => true);
+        }
+        if (!$r['ok'] || !is_array($r['json']) || empty($r['json']['username'])) {
+            return $this->fail('دریافت اطلاعات کاربر ناموفق بود', $r);
+        }
+        $u = $r['json'];
+        return $this->ok(array(
+            'username' => $u['username'],
+            'sub_url'  => $this->abs_url(isset($u['subscription_url']) ? $u['subscription_url'] : ''),
+            'configs'  => $this->links($u),
+            'data'     => array(),
+            'limit'    => isset($u['data_limit']) ? (int) $u['data_limit'] : (int) (isset($a['bytes']) ? $a['bytes'] : 0),
+            'expire'   => isset($u['expire']) && $u['expire'] ? self::ts($u['expire']) : (int) (isset($a['expire']) ? $a['expire'] : 0),
+        ));
+    }
+
     public function info(array $svc) {
         $r = $this->get_user($svc['username']);
         if ($r['code'] === 404) {

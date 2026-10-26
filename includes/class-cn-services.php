@@ -112,15 +112,38 @@ class CN_Services {
         if (!$driver) {
             return new WP_Error('cn_driver', 'نوع پنل پشتیبانی نمی‌شود.');
         }
-        $username = '';
-        for ($i = 0; $i < 5; $i++) {
-            $username = CN_Util::make_username($ctx['order_id']);
-            if (!self::username_taken($panel['id'], $username)) {
-                break;
-            }
-        }
         $expire = $plan['days'] > 0 ? time() + $plan['days'] * DAY_IN_SECONDS : 0;
         $bytes = CN_Util::gb_to_bytes($plan['volume_gb']);
+        // Duplicate guard: drivers that can look a user up get the username saved on the order item
+        // before the panel call, so a retry after a timeout adopts the account the panel may have made.
+        $can_find = method_exists($driver, 'find_created') && $driver::can_find() && (int) $ctx['item_id'] > 0 && function_exists('wc_get_order_item_meta');
+        $tried = $can_find ? (string) wc_get_order_item_meta((int) $ctx['item_id'], CN_Woo::ITEM_TRY_USER, true) : '';
+        $r = null;
+        $username = '';
+        if ($tried !== '' && !self::username_taken($panel['id'], $tried)) {
+            $username = $tried;
+            try {
+                $found = $driver->find_created($tried, array('bytes' => $bytes, 'expire' => $expire));
+            } catch (Throwable $e) {
+                $found = array('ok' => false, 'msg' => $e->getMessage());
+            }
+            if (!empty($found['ok'])) {
+                $r = $found;
+                CN_Util::log('اکانت از تلاش قبلی در پنل پیدا شد و به سفارش وصل شد: ' . $tried, array('panel_id' => $panel['id'], 'order_id' => $ctx['order_id']));
+            } elseif (empty($found['missing'])) {
+                $msg = 'بررسی اکانت تلاش قبلی ناموفق بود: ' . (isset($found['msg']) ? $found['msg'] : 'خطای نامشخص');
+                CN_Util::log($msg, array('panel_id' => $panel['id'], 'order_id' => $ctx['order_id']), 'error');
+                return new WP_Error('cn_create', $msg);
+            }
+        }
+        if ($username === '') {
+            for ($i = 0; $i < 5; $i++) {
+                $username = CN_Util::make_username($ctx['order_id']);
+                if (!self::username_taken($panel['id'], $username)) {
+                    break;
+                }
+            }
+        }
         $args = array(
             'username' => $username,
             'bytes'    => $bytes,
@@ -131,10 +154,15 @@ class CN_Services {
             'options'  => $plan['options'],
             'plan_id'  => $plan['id'],
         );
-        try {
-            $r = $driver->create($args);
-        } catch (Throwable $e) {
-            $r = array('ok' => false, 'msg' => $e->getMessage());
+        if ($r === null) {
+            if ($can_find) {
+                wc_update_order_item_meta((int) $ctx['item_id'], CN_Woo::ITEM_TRY_USER, $username);
+            }
+            try {
+                $r = $driver->create($args);
+            } catch (Throwable $e) {
+                $r = array('ok' => false, 'msg' => $e->getMessage());
+            }
         }
         if (empty($r['ok'])) {
             $msg = isset($r['msg']) ? $r['msg'] : 'خطای نامشخص';
@@ -167,6 +195,9 @@ class CN_Services {
         }
         if (!empty($r['data']['stock_id'])) {
             CN_Stock::attach($r['data']['stock_id'], $id);
+        }
+        if ($can_find) {
+            wc_delete_order_item_meta((int) $ctx['item_id'], CN_Woo::ITEM_TRY_USER);
         }
         CN_Util::log('اکانت ساخته شد: ' . $r['username'], array('panel_id' => $panel['id'], 'service_id' => $id, 'order_id' => $ctx['order_id']));
         do_action('cn_service_created', $id, $ctx);

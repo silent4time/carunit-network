@@ -160,6 +160,12 @@ class CN_Util {
         return false;
     }
 
+    public static function is_locked($key) {
+        global $wpdb;
+        $until = (int) $wpdb->get_var($wpdb->prepare("SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", 'cn_lock_' . md5($key)));
+        return $until >= time();
+    }
+
     public static function unlock($key) {
         global $wpdb;
         $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", 'cn_lock_' . md5($key)));
