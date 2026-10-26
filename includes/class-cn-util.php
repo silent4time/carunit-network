@@ -70,15 +70,11 @@ class CN_Util {
         return $mysql ? (int) strtotime($mysql . ' UTC') : 0;
     }
 
-    /** Duration label for start-on-first-use services: «۱ ماه از اولین اتصال». */
+    /** Duration label for start-on-first-use services: exact days, never rounded: «۳۱ روز از اولین اتصال». */
     public static function hold_label($days) {
         $days = (int) $days;
         if ($days <= 0) {
             return 'نامحدود';
-        }
-        if ($days === 31 || $days % 30 === 0) {
-            $m = $days === 31 ? 1 : intdiv($days, 30);
-            return self::fa_digits((string) $m) . ' ماه از اولین اتصال';
         }
         return self::fa_digits((string) $days) . ' روز از اولین اتصال';
     }
