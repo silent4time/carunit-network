@@ -12,6 +12,8 @@ class CN_Woo {
     const ORDER_MAILED = '_cn_mailed_services';
     const ORDER_RETRY  = '_cn_retry_attempt';
     const ITEM_TRY_USER = '_cn_try_user';
+    const ITEM_MANUAL  = '_cn_manual_check';
+    const MANUAL_NOTE  = 'ابزار شبکه: نیاز به بررسی دستی';
     const AS_GROUP     = 'carunit-network';
     const READY_NOTE   = 'ابزار شبکه: سرویس شما آماده شد';
 
@@ -284,6 +286,7 @@ class CN_Woo {
         try {
             $any = false;
             $failed = false;
+            $manual_only = null; // true when every failed item waits for a manual check
             $all_ours = true;
             foreach ($order->get_items() as $item_id => $item) {
                 $plan = self::item_plan($item);
@@ -292,8 +295,20 @@ class CN_Woo {
                     continue;
                 }
                 $any = true;
+                // Automatic retries never touch items waiting for a manual check (possible paid purchase).
+                if (!empty(self::$running['cn_retry_delivery']) && ($item->get_meta(self::ITEM_MANUAL) || ($item->get_meta(self::ITEM_ERROR) !== '' && self::manual_plan($plan)))) {
+                    if (!$item->get_meta(self::ITEM_MANUAL)) {
+                        self::flag_manual($order, $item_id, $item, $plan, (string) $item->get_meta(self::ITEM_ERROR));
+                    }
+                    $failed = true;
+                    if ($manual_only === null) {
+                        $manual_only = true;
+                    }
+                    continue;
+                }
                 $qty = max(0, (int) $item->get_quantity() + (int) $order->get_qty_refunded_for_item($item_id));
                 $error = '';
+                $error_code = '';
                 $renew_id = (int) $item->get_meta(self::ITEM_RENEW);
                 if ($renew_id) {
                     $done = (int) $item->get_meta(self::ITEM_RENEWED);
@@ -306,6 +321,7 @@ class CN_Woo {
                         $r = CN_Services::renew($svc, $plan, array('order_id' => $order_id));
                         if (is_wp_error($r)) {
                             $error = $r->get_error_message();
+                            $error_code = method_exists($r, 'get_error_code') ? $r->get_error_code() : '';
                             break;
                         }
                         $renewed++;
@@ -323,6 +339,7 @@ class CN_Woo {
                         ));
                         if (is_wp_error($r)) {
                             $error = $r->get_error_message();
+                            $error_code = method_exists($r, 'get_error_code') ? $r->get_error_code() : '';
                             break;
                         }
                         $created++;
@@ -331,8 +348,17 @@ class CN_Woo {
                 if ($error !== '') {
                     $failed = true;
                     $item->update_meta_data(self::ITEM_ERROR, $error);
+                    if ($error_code === 'cn_unsure' || self::manual_plan($plan)) {
+                        self::flag_manual($order, $item_id, $item, $plan, $error);
+                        if ($manual_only === null) {
+                            $manual_only = true;
+                        }
+                    } else {
+                        $manual_only = false;
+                    }
                 } else {
                     $item->delete_meta_data(self::ITEM_ERROR);
+                    $item->delete_meta_data(self::ITEM_MANUAL);
                 }
                 $item->save();
             }
@@ -350,7 +376,7 @@ class CN_Woo {
                 $order->delete_meta_data(self::ORDER_RETRY);
             }
             $order->save();
-            if ($failed) {
+            if ($failed && $manual_only !== true) {
                 self::schedule_retry($order);
             }
             if ($created || $renewed) {
@@ -485,6 +511,32 @@ class CN_Woo {
         }
         wp_schedule_single_event(time() + $delay, $hook, $args);
         return true;
+    }
+
+    /** Plan on a paid panel that cannot look a user up: a blind retry could buy twice. */
+    public static function manual_plan($plan) {
+        if (!class_exists('CN_Panels') || !class_exists('CN_Drivers') || empty($plan['panel_id'])) {
+            return false;
+        }
+        $panel = CN_Panels::get($plan['panel_id']);
+        $cls = $panel ? CN_Drivers::cls($panel['type']) : null;
+        return $cls && $cls::paid() && !$cls::can_find();
+    }
+
+    /** Mark an item for a manual check (no automatic retry) and leave a private admin note. */
+    private static function flag_manual($order, $item_id, $item, $plan, $error) {
+        $item->update_meta_data(self::ITEM_MANUAL, 1);
+        $item->save();
+        $panel = class_exists('CN_Panels') && !empty($plan['panel_id']) ? CN_Panels::get($plan['panel_id']) : null;
+        $order->add_order_note(sprintf(
+            '%s — آیتم «%s» (#%s)، پنل «%s» (#%s): %s. تلاش خودکار انجام نمی‌شود چون ممکن است خرید انجام شده باشد؛ پنل را بررسی کنید و در صورت نیاز از «عملیات سفارش» دوباره تحویل دهید.',
+            self::MANUAL_NOTE,
+            $item->get_name(),
+            CN_Util::fa_digits($item_id),
+            $panel && isset($panel['name']) ? $panel['name'] : '—',
+            CN_Util::fa_digits(isset($plan['panel_id']) ? $plan['panel_id'] : 0),
+            $error
+        ), 0, false);
     }
 
     /** Schedule the next automatic retry (2, 10, 30 min); counter in _cn_retry_attempt. */

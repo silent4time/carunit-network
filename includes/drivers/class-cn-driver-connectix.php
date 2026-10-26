@@ -20,6 +20,7 @@ class CN_Driver_Connectix extends CN_Driver {
         return array(
             'token'       => array('label' => 'توکن API فروشنده', 'type' => 'password', 'secret' => true, 'required' => true, 'help' => 'در پنل فروشندهٔ کانکتیکس، بخش API ساخته می‌شود.'),
             'first_login' => array('label' => 'شروع اعتبار از اولین اتصال مشتری', 'type' => 'checkbox', 'help' => 'اگر روشن باشد، مدت پلن از اولین ورود مشتری به برنامه شمرده می‌شود، نه از لحظهٔ خرید.', 'advanced' => true),
+            'use_polban'  => array('label' => 'از طریق پل‌بان', 'type' => 'checkbox', 'help' => 'درخواست‌ها از طریق پل‌بان ارسال شوند. https://seller-api.connectix.vip باید در allowlist پل‌بان باشد.'),
         );
     }
 
@@ -27,6 +28,10 @@ class CN_Driver_Connectix extends CN_Driver {
         return array(
             'plan_id' => array('label' => 'شناسهٔ پلن کانکتیکس', 'type' => 'text', 'required' => true, 'help' => 'با دکمهٔ «دریافت پلن‌ها» در صفحهٔ پنل‌ها خودکار پر می‌شود.'),
         );
+    }
+
+    public static function paid() {
+        return true;
     }
 
     public static function caps() {
@@ -54,7 +59,8 @@ class CN_Driver_Connectix extends CN_Driver {
     protected function api($method, $path, array $o = array()) {
         $o['bearer'] = $this->secret('token');
         $o['verify'] = true;
-        $o += array('timeout' => 60);
+        // Via Polban the wait must outlast Polban's own 60s upstream timeout.
+        $o += array('timeout' => $this->s('use_polban') ? self::POLBAN_TIMEOUT : 60);
         return $this->http($method, $path, $o);
     }
 
@@ -175,7 +181,7 @@ class CN_Driver_Connectix extends CN_Driver {
         }
         $r = $this->api('POST', '/clients/store', array('form' => $form));
         if ($r['code'] === 0) {
-            return $this->fail(self::UNSURE, $r);
+            return array('unsure' => true) + $this->fail(self::UNSURE, $r);
         }
         if (!$r['ok']) {
             return $this->fail('ساخت کاربر در کانکتیکس ناموفق بود', $r);
@@ -249,7 +255,7 @@ class CN_Driver_Connectix extends CN_Driver {
         }
         $r = $this->api('POST', '/clients/add-plan', array('json' => array('id' => $id, 'plan_id' => $plan)));
         if ($r['code'] === 0) {
-            return $this->fail(self::UNSURE, $r);
+            return array('unsure' => true) + $this->fail(self::UNSURE, $r);
         }
         if ($r['code'] === 403) {
             return $this->fail('کانکتیکس اجازهٔ خرید این پلن را نداد؛ موجودی یا دسترسی حساب فروشنده را بررسی کنید', $r);

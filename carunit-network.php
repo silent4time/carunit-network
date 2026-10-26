@@ -2,7 +2,7 @@
 /**
  * Plugin Name: کاریونیت — ابزار شبکه
  * Description: اتصال به پنل‌های اکانت شبکه (مرزبان، پاسارگارد، مرزنشین، ربکا، 3x-ui، علیرضا، هیدیفای، s-ui، WGDashboard، IBSng، میکروتیک، میرزا، ایلان، کانکتیکس و فروش دستی)، ساخت خودکار اکانت بعد از پرداخت ووکامرس، تمدید و مدیریت سرویس‌ها.
- * Version: 1.2.3
+ * Version: 1.2.4
  * Author: CarUnit
  * Requires PHP: 7.4
  * Requires Plugins: woocommerce
@@ -13,7 +13,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('CN_VERSION', '1.2.3');
+define('CN_VERSION', '1.2.4');
 define('CN_FILE', __FILE__);
 define('CN_DIR', plugin_dir_path(__FILE__));
 define('CN_URL', plugin_dir_url(__FILE__));

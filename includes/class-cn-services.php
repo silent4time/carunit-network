@@ -167,7 +167,7 @@ class CN_Services {
         if (empty($r['ok'])) {
             $msg = isset($r['msg']) ? $r['msg'] : 'خطای نامشخص';
             CN_Util::log('ساخت اکانت ناموفق: ' . $msg, array('panel_id' => $panel['id'], 'order_id' => $ctx['order_id']), 'error');
-            return new WP_Error('cn_create', $msg);
+            return new WP_Error(!empty($r['unsure']) ? 'cn_unsure' : 'cn_create', $msg);
         }
         $now = CN_DB::now();
         $exp = isset($r['expire']) ? (int) $r['expire'] : $expire;
@@ -228,7 +228,7 @@ class CN_Services {
         if (empty($r['ok'])) {
             $msg = isset($r['msg']) ? $r['msg'] : 'خطای نامشخص';
             CN_Util::log('تمدید ناموفق: ' . $msg, array('panel_id' => $svc['panel_id'], 'service_id' => $svc['id'], 'order_id' => $order_id), 'error');
-            return new WP_Error('cn_renew', $msg);
+            return new WP_Error(!empty($r['unsure']) ? 'cn_unsure' : 'cn_renew', $msg);
         }
         $wpdb->update(CN_DB::t('services'), array(
             'plan_id'     => $plan['id'],

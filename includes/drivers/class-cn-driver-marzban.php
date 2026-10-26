@@ -91,7 +91,7 @@ class CN_Driver_Marzban extends CN_Driver {
         }
         $out = $this->ok(array('msg' => 'اتصال برقرار است.'));
         if ($this->s('template') !== '') {
-            $tpl = $this->template(true);
+            $tpl = $this->template(true, false);
             if (empty($tpl['ok'])) {
                 return $tpl;
             }
@@ -102,7 +102,7 @@ class CN_Driver_Marzban extends CN_Driver {
     }
 
     /** Protocol settings and inbounds/groups copied from the panel's template user (ids and passwords stripped). */
-    protected function template($fresh = false) {
+    protected function template($fresh = false, $fallback = true) {
         $name = trim((string) $this->s('template'));
         if (!$fresh) {
             $c = $this->cache_get('tpl');
@@ -113,6 +113,14 @@ class CN_Driver_Marzban extends CN_Driver {
         $r = $this->get_user($name);
         $key = $this->v1() ? 'proxy_settings' : 'proxies';
         if (!$r['ok'] || !is_array($r['json']) || !isset($r['json'][$key])) {
+            // Panel unreachable for a moment: reuse the last good copy (kept without expiry) instead of failing the order.
+            $keep = $fallback ? $this->cache_get('tpl_keep') : null;
+            if (is_array($keep) && isset($keep['name']) && $keep['name'] === $name && !empty($keep['ok'])) {
+                if (class_exists('CN_Util') && method_exists('CN_Util', 'log')) {
+                    CN_Util::log('کاربر نمونه «' . $name . '» از پنل خوانده نشد؛ نسخهٔ ذخیره‌شدهٔ قبلی استفاده شد (' . CN_Http::error_text($r) . ')', array('panel_id' => $this->panel['id']), 'error');
+                }
+                return $keep;
+            }
             return $this->fail('کاربر نمونه «' . $name . '» در پنل پیدا نشد', $r);
         }
         $u = $r['json'];
@@ -125,6 +133,7 @@ class CN_Driver_Marzban extends CN_Driver {
         $in = $this->v1() ? (isset($u['group_ids']) ? array_values((array) $u['group_ids']) : array()) : (isset($u['inbounds']) ? (array) $u['inbounds'] : array());
         $tpl = $this->ok(array('name' => $name, 'proxies' => $proxies, 'inbounds' => $in));
         $this->cache_set('tpl', $tpl, HOUR_IN_SECONDS);
+        $this->cache_set('tpl_keep', $tpl, 0);
         return $tpl;
     }
 

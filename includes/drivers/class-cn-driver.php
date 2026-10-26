@@ -13,7 +13,8 @@ if (!defined('ABSPATH')) {
  * info()   returns: ok, status, used, limit, expire (ts|0), online, sub_url, configs
  */
 abstract class CN_Driver {
-    const POLBAN_TIMEOUT = 35;
+    /** Site -> Polban wait. Polban 1.0.1 waits up to 60s for the panel, so this must be longer. */
+    const POLBAN_TIMEOUT = 75;
 
     /** @var array */
     protected $panel;
@@ -46,6 +47,11 @@ abstract class CN_Driver {
 
     /** Driver implements find_created() (look up a user a timed-out create may have made). */
     public static function can_find() {
+        return false;
+    }
+
+    /** Every successful create/renew is a paid purchase (no automatic retry without a user lookup). */
+    public static function paid() {
         return false;
     }
 
@@ -184,7 +190,10 @@ abstract class CN_Driver {
             }
         }
 
-        return CN_Http::request($method, $url, $o);
+        $res = CN_Http::request($method, $url, $o);
+        $res['target'] = (string) wp_parse_url($url, PHP_URL_HOST);
+        $res['via'] = 'direct';
+        return $res;
     }
 
     /**
@@ -262,6 +271,7 @@ abstract class CN_Driver {
             $decoded = json_decode($pbody, true);
             $code = (int) $j['code'];
             $error = isset($j['error']) ? (string) $j['error'] : '';
+            $target = (string) wp_parse_url($target_url, PHP_URL_HOST);
             $rh = isset($j['headers']) && is_array($j['headers']) ? array_change_key_case($j['headers'], CASE_LOWER) : array();
             return array(
                 'code'    => $code,
@@ -271,9 +281,14 @@ abstract class CN_Driver {
                 'ok'      => $error === '' && $code >= 200 && $code < 300,
                 'json'    => is_array($decoded) ? $decoded : null,
                 'cookies' => self::parse_set_cookie(isset($rh['set-cookie']) ? $rh['set-cookie'] : array()),
+                'target'  => $target,
+                'via'     => 'polban',
             );
         }
 
+        // Polban itself did not answer with a proxy result (unreachable, bad key, ...).
+        $res['target'] = (string) wp_parse_url($polban_url, PHP_URL_HOST);
+        $res['via'] = 'polban_link';
         return $res;
     }
 

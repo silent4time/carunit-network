@@ -9,7 +9,7 @@ function remove_action($h, $cb, $p = 10) { global $H; foreach ($H[$h][$p] ?? arr
 function do_action($h, ...$a) { global $H; if (empty($H[$h])) return; ksort($H[$h]); foreach ($H[$h] as $l) foreach ($l as $x) call_user_func_array($x[0], array_slice($a, 0, $x[1])); }
 function apply_filters($h, $v, ...$a) { global $H; if (empty($H[$h])) return $v; ksort($H[$h]); foreach ($H[$h] as $l) foreach ($l as $x) $v = call_user_func_array($x[0], array_slice(array_merge(array($v), $a), 0, $x[1])); return $v; }
 function is_wp_error($x) { return $x instanceof WP_Error; }
-class WP_Error { public $m; function __construct($c, $m) { $this->m = $m; } function get_error_message() { return $this->m; } }
+class WP_Error { public $m, $c; function __construct($c, $m) { $this->c = $c; $this->m = $m; } function get_error_code() { return $this->c; } function get_error_message() { return $this->m; } }
 // Action Scheduler
 $AS = array();
 function as_schedule_single_action($t, $h, $a, $g) { global $AS; $AS[] = array('t' => $t, 'h' => $h, 'a' => $a, 'g' => $g, 'done' => false); return count($AS); }
@@ -25,13 +25,17 @@ class CN_Util {
     static function setting($k, $d = '') { return self::$set[$k] ?? $d; }
     static function fa_digits($s) { return (string) $s; }
 }
+class DrvFree { static function paid() { return false; } static function can_find() { return true; } }
+class DrvPaid { static function paid() { return true; } static function can_find() { return false; } }
+class CN_Panels { static $type = 'free'; static function get($id) { return array('id' => $id, 'name' => 'P' . $id, 'type' => self::$type); } }
+class CN_Drivers { static function cls($t) { return $t === 'paid' ? 'DrvPaid' : 'DrvFree'; } }
 class CN_Plans { static function get($id) { return array('id' => $id, 'panel_id' => 8); } static function for_product($p) { return null; } }
 class CN_Services {
-    static $db = array(); static $fail = 0; static $calls = 0;
+    static $db = array(); static $fail = 0; static $calls = 0; static $code = 'x';
     static function for_item($item) { return array_values(array_filter(self::$db, function ($s) use ($item) { return $s['order_item_id'] === $item; })); }
     static function for_order($o) { return array_values(array_filter(self::$db, function ($s) use ($o) { return $s['order_id'] === $o; })); }
     static function get($id) { return self::$db[$id] ?? null; }
-    static function create($plan, $ctx) { self::$calls++; if (self::$fail > 0) { self::$fail--; return new WP_Error('x', 'timeout'); } $id = count(self::$db) + 100; self::$db[$id] = array('id' => $id, 'order_id' => $ctx['order_id'], 'order_item_id' => $ctx['item_id'], 'username' => 'cu_' . $id, 'user_id' => 1); return $id; }
+    static function create($plan, $ctx) { self::$calls++; if (self::$fail > 0) { self::$fail--; return new WP_Error(self::$code, 'timeout'); } $id = count(self::$db) + 100; self::$db[$id] = array('id' => $id, 'order_id' => $ctx['order_id'], 'order_item_id' => $ctx['item_id'], 'username' => 'cu_' . $id, 'user_id' => 1); return $id; }
 }
 class WC_Order_Item { public $id, $meta = array('_cn_plan_id' => 7), $qty = 1; function __construct($id) { $this->id = $id; }
     function get_meta($k) { return $this->meta[$k] ?? ''; } function update_meta_data($k, $v) { $this->meta[$k] = $v; } function delete_meta_data($k) { unset($this->meta[$k]); }
@@ -138,4 +142,37 @@ CN_Services::$fail = 1;
 $ORDERS[6] = $o = new WC_Order(6, 'pending'); $o->update_status('processing'); $o->status = 'completed';
 CN_Woo::action_deliver($o); run_as('cn_send_ready_mail');
 ok(end($READY->sent) === array(6, 1), 'admin re-deliver -> ready email');
+
+function pend_for($id) { return array_values(array_filter(pending_as('cn_retry_delivery'), function ($x) use ($id) { return $x['a']['order_id'] === $id; })); }
+function run_for($id) { global $AS; foreach ($AS as $i => $x) if (!$x['done'] && $x['h'] === 'cn_retry_delivery' && $x['a']['order_id'] === $id) { $AS[$i]['done'] = true; do_action('cn_retry_delivery', $id); return 1; } return 0; }
+// 8 v1.2.4: paid driver without lookup (connectix) -> no automatic retry, private manual-check note
+CN_Panels::$type = 'paid'; CN_Services::$fail = 1; CN_Services::$calls = 0;
+$ORDERS[7] = $o = new WC_Order(7, 'pending'); $o->update_status('processing');
+$mn = array_values(array_filter($o->notes, function ($n) { return strpos($n[0], CN_Woo::MANUAL_NOTE) === 0; }));
+ok(!pend_for(7), 'paid driver failure: no retry scheduled');
+ok(count($mn) === 1 && $mn[0][1] === 0 && strpos($mn[0][0], '#70') !== false && strpos($mn[0][0], 'P8') !== false, 'private manual-check note with item/panel: ' . ($mn[0][0] ?? ''));
+ok($o->items[70]->get_meta('_cn_manual_check') === 1, 'item flagged for manual check');
+// 9 UNSURE on a non-paid driver -> manual too
+CN_Panels::$type = 'free'; CN_Services::$fail = 1; CN_Services::$code = 'cn_unsure';
+$ORDERS[8] = $o = new WC_Order(8, 'pending'); $o->update_status('processing');
+ok(!pend_for(8) && $o->items[80]->get_meta('_cn_manual_check') === 1, 'cn_unsure -> no retry, flagged');
+CN_Services::$code = 'x';
+// 10 retry already scheduled by 1.2.3 for a connectix item fires -> skipped, no create call, note added
+CN_Panels::$type = 'paid'; CN_Services::$calls = 0;
+$ORDERS[9] = $o = new WC_Order(9, 'processing');
+$o->meta['_cn_failed'] = 1; $o->items[90]->meta['_cn_error'] = 'پاسخی از کانکتیکس نرسید';
+CN_Woo::schedule_retry($o); $o->notes = array();
+run_for(9);
+ok(CN_Services::$calls === 0, 'stale retry skips paid item (no purchase attempt)');
+ok(!pend_for(9) && $o->items[90]->get_meta('_cn_manual_check') === 1, 'no further retry, item flagged');
+ok(count(array_filter($o->notes, function ($n) { return strpos($n[0], CN_Woo::MANUAL_NOTE) === 0; })) === 1, 'manual note added once on skipped retry');
+run_for(9); CN_Woo::schedule_retry($o); run_for(9);
+ok(CN_Services::$calls === 0 && count(array_filter($o->notes, function ($n) { return strpos($n[0], CN_Woo::MANUAL_NOTE) === 0; })) === 1, 'flagged item skipped again, no duplicate note');
+// 11 admin re-deliver still processes it and clears the flag
+CN_Woo::action_deliver($o);
+ok(CN_Services::$calls === 1 && $o->items[90]->get_meta('_cn_manual_check') === '' && count(CN_Services::for_item(90)) === 1, 'admin re-deliver creates and clears manual flag');
+// 12 free driver failure still retries
+CN_Panels::$type = 'free'; CN_Services::$fail = 1;
+$ORDERS[10] = $o = new WC_Order(10, 'pending'); $o->update_status('processing');
+ok(count(pend_for(10)) === 1, 'non-paid failure still scheduled for retry');
 exit($fail ? 1 : 0);

@@ -7,7 +7,7 @@ function add_action() {} function do_action() {} function is_admin() { return fa
 function wp_json_encode($x) { return json_encode($x); } function wp_parse_url($u, $c = -1) { return parse_url($u, $c); }
 function get_transient($k) { global $TR; return $TR[$k] ?? false; } function set_transient($k, $v) { global $TR; $TR[$k] = $v; } function delete_transient($k) { global $TR; unset($TR[$k]); }
 function is_wp_error($x) { return $x instanceof WP_Error; }
-class WP_Error { public $m; function __construct($c, $m) { $this->m = $m; } function get_error_message() { return $this->m; } }
+class WP_Error { public $m, $c; function __construct($c, $m) { $this->c = $c; $this->m = $m; } function get_error_code() { return $this->c; } function get_error_message() { return $this->m; } }
 function wc_get_order_item_meta($i, $k) { global $IM; return $IM[$i][$k] ?? ''; } function wc_update_order_item_meta($i, $k, $v) { global $IM; $IM[$i][$k] = $v; } function wc_delete_order_item_meta($i, $k) { global $IM; unset($IM[$i][$k]); }
 class WPDB { public $rows = array(), $insert_id = 0, $last_error = '', $options = 'wp_options';
     function prepare($q, ...$a) { return array($q, $a); } function get_var($q) { foreach ($this->rows as $r) if (isset($r['username']) && $r['panel_id'] == $q[1][0] && $r['username'] === $q[1][1]) return 1; return null; }
@@ -38,13 +38,14 @@ add_filter('cn_http_mock', function ($v, $m, $url, $args, $o) {
     $path = parse_url($url, PHP_URL_PATH);
     $wrap = function ($code, $body) use ($via) { return $via ? array('code' => 200, 'body' => json_encode(array('ok' => true, 'code' => $code, 'error' => '', 'headers' => array(), 'body' => json_encode($body)))) : array('code' => $code, 'body' => json_encode($body)); };
     $timeout = $via ? array('code' => 502, 'body' => json_encode(array('ok' => false, 'code' => 0, 'error' => 'Connection timed out after 25001 milliseconds', 'headers' => array(), 'body' => ''))) : array('code' => 0, 'body' => '', 'error' => 'cURL error 28: Operation timed out');
+    if ($m === 'POST' && substr($path, -14) === '/clients/store') return $MODE['create'] === 'timeout' ? $timeout : $wrap(200, array('client_id' => '1'));
     if ($path === '/api/admin/token') return $wrap(200, array('access_token' => 'T'));
     if ($path === '/api/groups') return $wrap(200, array('groups' => array(array('id' => 1, 'name' => 'g'))));
     if ($m === 'POST' && $path === '/api/user') { $b = json_decode($via ? $p['body'] : $args['body'], true); return $MODE['create'] === 'timeout' ? $timeout : $wrap(200, array('username' => $b['username'], 'subscription_url' => '/sub/x', 'links' => array('vless://a'))); }
     if ($m === 'GET' && strpos($path, '/api/user/') === 0) {
         if ($MODE['get'] === 'error') return $timeout;
         if ($MODE['get'] === 'missing') return $wrap(404, array('detail' => 'User not found'));
-        return $wrap(200, array('username' => rawurldecode(substr($path, 10)), 'subscription_url' => '/sub/y', 'links' => array('vless://b'), 'data_limit' => 5, 'expire' => null));
+        return $wrap(200, array('username' => rawurldecode(substr($path, 10)), 'subscription_url' => '/sub/y', 'links' => array('vless://b'), 'proxy_settings' => array('vless' => array('id' => 'x', 'flow' => '')), 'group_ids' => array(1), 'data_limit' => 5, 'expire' => null));
     }
     return $wrap(404, array());
 }, 10, 5);
@@ -59,7 +60,7 @@ $r = CN_Services::create($plan8, array('order_id' => 11453, 'item_id' => 81));
 $u = wc_get_order_item_meta(81, '_cn_try_user');
 ok(is_wp_error($r) && $u !== '', 'timeout: error + tried username saved on item');
 ok(strpos($r->get_error_message(), 'سرور سایت') !== false || strpos($r->get_error_message(), 'ناموفق') !== false, 'Persian timeout message kept: ' . $r->get_error_message());
-ok($REQ[0][2] === true && $REQ[0][3] === 35, 'Polban request timeout 35s');
+ok($REQ[0][2] === true && $REQ[0][3] === 75, 'Polban request timeout 75s');
 // B retry: panel had created it -> adopt, no second POST
 $MODE = array('create' => 'ok', 'get' => 'found'); $REQ = array();
 $r = CN_Services::create($plan8, array('order_id' => 11453, 'item_id' => 81));
@@ -90,5 +91,35 @@ ok(CN_Driver_Pasarguard::can_find() && CN_Driver_Marzban::can_find(), 'pasarguar
 // H longer driver timeouts kept through Polban (connectix 60s)
 $REQ = array();
 $cx = new class(array('id' => 70, 'type' => 'x', 'url' => 'https://cx.test', 'settings' => array('use_polban' => 1), 'secrets' => array())) extends CN_Driver_Xui { function h($o) { return $this->http('GET', '/z', $o); } };
-$cx->h(array('timeout' => 60)); ok($REQ[0][3] === 60, 'Polban timeout = max(35, driver timeout)');
+$cx->h(array('timeout' => 90)); ok($REQ[0][3] === 90, 'Polban timeout = max(75, driver timeout)');
+
+// I v1.2.4 template fallback (panel 5 with template)
+$PANELS[50] = array('id' => 50, 'type' => 'pasarguard', 'status' => 'active', 'url' => 'https://pg5.test', 'settings' => array('username' => 'a', 'template' => 'Pasargadae_server'), 'secrets' => array());
+$plan50 = array('panel_id' => 50) + $plan8;
+$TR = array(); $MODE = array('create' => 'ok', 'get' => 'found');
+$r = CN_Services::create($plan50, array('order_id' => 6, 'item_id' => 0));
+ok(is_int($r), 'template read and create ok');
+// expire the 1h copy, keep the non-expiring one
+$d50 = CN_Drivers::make($PANELS[50]);
+$keyfn = function ($k) use ($PANELS) { $p = $PANELS[50]; return 'cn_c_' . md5($p['id'] . '|' . $p['url'] . '|' . wp_json_encode($p['settings']) . '|' . $k); };
+ok(isset($TR[$keyfn('tpl_keep')]), 'non-expiring template copy stored');
+unset($TR[$keyfn('tpl')]);
+$MODE = array('create' => 'ok', 'get' => 'error'); $REQ = array();
+$r = CN_Services::create($plan50, array('order_id' => 7, 'item_id' => 0));
+ok(is_int($r) && cnt('POST', '/api/user') === 1, 'template GET fails -> last saved template used, account created');
+$t = $d50->test();
+ok(empty($t['ok']) && strpos($t['msg'], 'Pasargadae_server') !== false && strpos($t['msg'], 'pg5.test') !== false, 'connection test still reports template failure with host: ' . $t['msg']);
+// J connectix: polban field, timeouts, UNSURE code, paid
+ok(isset(CN_Driver_Connectix::fields()['use_polban']), 'connectix has use_polban field');
+ok(CN_Driver_Connectix::paid() && !CN_Driver_Pasarguard::paid() && !CN_Driver_Eylan::paid(), 'only connectix is paid');
+class CXT extends CN_Driver_Connectix { function h() { return $this->api('GET', '/clients/get-enabled-plans'); } }
+$REQ = array(); (new CXT(array('id' => 71, 'type' => 'connectix', 'url' => '', 'settings' => array('use_polban' => 1), 'secrets' => array('token' => 't'))))->h();
+ok($REQ[0][2] === true && $REQ[0][3] === 75, 'connectix via polban 75s');
+$REQ = array(); (new CXT(array('id' => 72, 'type' => 'connectix', 'url' => '', 'settings' => array(), 'secrets' => array('token' => 't'))))->h();
+ok($REQ[0][2] === false && $REQ[0][3] === 60, 'connectix direct 60s (unchanged)');
+$PANELS[7]['settings'] = array('use_polban' => 1); $PANELS[7]['secrets'] = array('token' => 't');
+$planc = array('panel_id' => 7, 'options' => array('plan_id' => '3')) + $plan8;
+$MODE = array('create' => 'timeout', 'get' => 'missing'); $REQ = array();
+$r = CN_Services::create($planc, array('order_id' => 11455, 'item_id' => 27));
+ok(is_wp_error($r) && $r->c === 'cn_unsure' && strpos($r->get_error_message(), 'پل‌بان به پنل') !== false, 'connectix no answer -> cn_unsure: ' . $r->get_error_message());
 exit($fail ? 1 : 0);

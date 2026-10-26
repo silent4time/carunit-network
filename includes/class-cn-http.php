@@ -96,12 +96,28 @@ class CN_Http {
 
     /** Short human message for a failed response. */
     public static function error_text(array $r) {
+        $r += array('error' => '', 'code' => 0, 'json' => null);
+        $via = isset($r['via']) ? (string) $r['via'] : '';
+        $host = isset($r['target']) && $r['target'] !== '' ? (string) $r['target'] : '';
+        $at = $host !== '' ? ' «' . $host . '»' : '';
+        if ($via === 'polban_link' && ($r['error'] !== '' || $r['code'] === 401 || $r['code'] === 0)) {
+            if ($r['error'] === '' && $r['code'] === 401) {
+                return 'پل‌بان' . $at . ' کلید API را نپذیرفت (HTTP 401)؛ کلید پل‌بان را در تنظیمات افزونه بررسی کنید.';
+            }
+            return 'سرور سایت به پل‌بان' . $at . ' نرسید؛ خطای خام: ' . ($r['error'] !== '' ? $r['error'] : 'HTTP ' . $r['code']);
+        }
         if ($r['error'] !== '') {
             $e = $r['error'];
-            if (preg_match('/timed?\s*out|cURL error 28|Connection timed out|Failed to connect/i', $e)) {
-                return 'سرور سایت به آدرس پنل نرسید (timeout یا قطع شبکه). آدرس را از روی همین هاست باز کنید یا فایروال پنل/هاست را بررسی کنید.';
+            if ($via === 'polban') {
+                if (stripos($e, 'allowlist') !== false) {
+                    return 'آدرس پنل' . $at . ' در allowlist پل‌بان نیست؛ مبدأ پنل (scheme://host:port) را در پنل پل‌بان اضافه کنید. خطای خام: ' . $e;
+                }
+                return 'پل‌بان به پنل' . $at . ' نرسید (پل‌بان در دسترس بود)؛ خطای خام: ' . $e;
             }
-            return $e;
+            if (preg_match('/timed?\s*out|cURL error 28|Connection timed out|Failed to connect/i', $e)) {
+                return 'سرور سایت به آدرس پنل' . $at . ' نرسید (timeout یا قطع شبکه). آدرس را از روی همین هاست باز کنید یا فایروال پنل/هاست را بررسی کنید. خطای خام: ' . $e;
+            }
+            return $host !== '' ? $e . ' (' . $host . ')' : $e;
         }
         $j = is_array($r['json']) ? $r['json'] : array();
         foreach (array('detail', 'msg', 'message', 'error') as $k) {
