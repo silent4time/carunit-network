@@ -16,6 +16,8 @@ class CN_Woo {
     const MANUAL_NOTE  = 'ابزار شبکه: نیاز به بررسی دستی';
     const AS_GROUP     = 'carunit-network';
     const READY_NOTE   = 'ابزار شبکه: سرویس شما آماده شد';
+    const ORDER_ALERTED = '_cn_admin_alerted';   // 1 = first-failure alert sent, 2 = final alert sent
+    const ORDER_PARTIAL = '_cn_partial_mailed';  // customer got the partial-delivery email
 
     /** Retry delays after a failed delivery (seconds): 2, 10, 30 minutes. */
     public static $retry_delays = array(120, 600, 1800);
@@ -260,6 +262,85 @@ class CN_Woo {
     }
 
     /**
+     * v1.2.5: undelivered network lines: list of [name, qty_missing, error].
+     */
+    public static function pending_items($order) {
+        $out = array();
+        $order = $order instanceof WC_Order ? $order : wc_get_order($order);
+        if (!$order) {
+            return $out;
+        }
+        foreach ($order->get_items() as $item_id => $item) {
+            if (!self::item_plan($item)) {
+                continue;
+            }
+            $qty = max(0, (int) $item->get_quantity() + (int) $order->get_qty_refunded_for_item($item_id));
+            $done = $item->get_meta(self::ITEM_RENEW) ? (int) $item->get_meta(self::ITEM_RENEWED) : count(CN_Services::for_item($item_id));
+            if ($done < $qty) {
+                $out[] = array($item->get_name(), $qty - $done, (string) $item->get_meta(self::ITEM_ERROR));
+            }
+        }
+        return $out;
+    }
+
+    /** Customer-facing «در حال انجام» box for an item that is not delivered yet. */
+    public static function pending_box_html($name, $qty = 1) {
+        $font = 'font-family:Tahoma,Arial,sans-serif;';
+        return '<div style="' . $font . 'background:#FFFBEA;border:1px solid #F5C518;border-top:4px solid #F5C518;border-radius:14px;padding:16px 18px;margin:0 0 14px;color:#2C2C2C;font-size:14px;line-height:2;direction:rtl;text-align:right;">'
+            . '<strong style="color:#0D0D0D;">' . esc_html($name) . '</strong>'
+            . ((int) $qty > 1 ? ' <span style="color:#6E6E6E;">(' . esc_html(CN_Util::fa_digits((string) (int) $qty)) . ' عدد)</span>' : '')
+            . ' <span style="display:inline-block;background:#F5C518;color:#0D0D0D;border-radius:6px;padding:0 8px;font-size:12px;font-weight:bold;">در حال انجام</span>'
+            . '<br>این محصول در حال آماده‌سازی است و به‌زودی برایتان ارسال می‌شود.</div>';
+    }
+
+    /** Admin recipients: site admin email + WooCommerce «new order» recipients. */
+    public static function admin_recipients() {
+        $to = array(get_option('admin_email'));
+        if (function_exists('WC') && WC()->mailer()) {
+            $emails = WC()->mailer()->get_emails();
+            if (isset($emails['WC_Email_New_Order'])) {
+                $to = array_merge($to, array_map('trim', explode(',', (string) $emails['WC_Email_New_Order']->get_recipient())));
+            }
+        }
+        return array_values(array_unique(array_filter($to, 'is_email')));
+    }
+
+    /**
+     * Alert the admin once on the first failure and once more when no automatic retry is left (final).
+     */
+    public static function maybe_alert_admin($order, $final) {
+        $level = (int) $order->get_meta(self::ORDER_ALERTED);
+        if ($level >= 2 || ($level >= 1 && !$final)) {
+            return false;
+        }
+        $pending = self::pending_items($order);
+        if (!$pending) {
+            return false;
+        }
+        $order->update_meta_data(self::ORDER_ALERTED, $final ? 2 : 1);
+        $order->save();
+        $rows = '';
+        foreach ($pending as $p) {
+            $rows .= '<li><strong>' . esc_html($p[0]) . '</strong> × ' . (int) $p[1] . '<br><code dir="ltr" style="white-space:pre-wrap">' . esc_html($p[2] !== '' ? $p[2] : '—') . '</code></li>';
+        }
+        $url = method_exists($order, 'get_edit_order_url') ? $order->get_edit_order_url() : admin_url('post.php?post=' . $order->get_id() . '&action=edit');
+        $state = $final ? 'تلاش خودکار دیگری انجام نمی‌شود؛ بررسی دستی لازم است.' : 'تلاش خودکار دوباره زمان‌بندی شد.';
+        $body = '<div dir="rtl" style="font-family:Tahoma,Arial,sans-serif;text-align:right">'
+            . '<p>تحویل بخشی از سفارش <strong>#' . esc_html($order->get_order_number()) . '</strong> ناموفق بود. ' . esc_html($state) . '</p>'
+            . '<ul>' . $rows . '</ul>'
+            . '<p><a href="' . esc_url($url) . '">باز کردن سفارش در پیشخوان</a></p></div>';
+        $subject = sprintf('[%s] %s تحویل سفارش %s ناموفق بود', wp_specialchars_decode(get_bloginfo('name'), ENT_QUOTES), $final ? 'هشدار نهایی:' : 'هشدار:', $order->get_order_number());
+        $headers = array('Content-Type: text/html; charset=UTF-8');
+        $sent = false;
+        foreach (self::admin_recipients() as $to) {
+            $msg = function_exists('WC') && WC()->mailer() ? WC()->mailer()->wrap_message('خطا در تحویل سفارش', $body) : $body;
+            $sent = wp_mail($to, $subject, $msg, $headers) || $sent;
+        }
+        $order->add_order_note($sent ? 'ابزار شبکه: هشدار خطای تحویل برای مدیر فرستاده شد.' : 'ابزار شبکه: ارسال هشدار مدیر ناموفق بود.');
+        return $sent;
+    }
+
+    /**
      * v1.2.5: true when every network line of the order is fully delivered (no error, manual check or pending retry).
      * Used by other CarUnit plugins (license manager) to decide whether a mixed order can be completed.
      */
@@ -404,10 +485,12 @@ class CN_Woo {
                 $order->delete_meta_data(self::ORDER_RETRY);
             }
             $order->save();
-            if ($failed && $manual_only !== true) {
-                self::schedule_retry($order);
+            $final = false;
+            if ($failed) {
+                $final = $manual_only === true || !self::schedule_retry($order);
+                self::maybe_alert_admin($order, $final);
             }
-            if ($created || $renewed) {
+            if ($created || $renewed || ($failed && !$order->get_meta(self::ORDER_PARTIAL))) {
                 self::queue_ready_mail($order_id);
             }
             // v1.2.5: mixed orders (e.g. + license products) complete once the other plugin reports its lines delivered.
@@ -674,15 +757,26 @@ class CN_Woo {
             if (!$order || !$order->is_paid() || $order->has_status(array('cancelled', 'refunded', 'failed'))) {
                 return false;
             }
+            if ($order->has_status('completed') && !self::unmailed_services($order)) {
+                return false;
+            }
             $new = self::unmailed_services($order);
-            if (!$new) {
+            $pending = self::pending_items($order);
+            $partial = $pending && !$order->get_meta(self::ORDER_PARTIAL);
+            if (!$new && !$partial) {
                 return false;
             }
             $ids = array();
             foreach ($new as $s) {
                 $ids[] = (int) $s[0]['id'];
             }
-            self::mark_mailed($order, $ids);
+            if ($ids) {
+                self::mark_mailed($order, $ids);
+            }
+            if ($pending) {
+                $order->update_meta_data(self::ORDER_PARTIAL, 1);
+                $order->save();
+            }
             $sent = false;
             if (function_exists('WC') && WC()->mailer()) {
                 $emails = WC()->mailer()->get_emails();
