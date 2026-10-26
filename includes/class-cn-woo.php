@@ -368,6 +368,21 @@ class CN_Woo {
         return true;
     }
 
+    /** v1.2.8: is this order line a network service (by item meta or by product→plan mapping)? */
+    public static function is_network_item($item) {
+        return (bool) self::item_plan($item);
+    }
+
+    /** v1.2.8: are all non-network lines (license products) delivered? True when the order has none. */
+    public static function foreign_ready($order) {
+        foreach ($order->get_items() as $item) {
+            if (!self::item_plan($item)) {
+                return (bool) apply_filters('carunit_order_foreign_items_ready', false, $order);
+            }
+        }
+        return true;
+    }
+
     public static function order_has_services($order) {
         foreach ($order->get_items() as $item) {
             if (self::item_plan($item)) {
@@ -404,6 +419,11 @@ class CN_Woo {
                     continue;
                 }
                 $any = true;
+                if (!$item->get_meta(self::ITEM_PLAN) && !empty($plan['id'])) {
+                    // v1.2.8: REST/admin orders skip checkout meta; stamp it so other plugins recognise network lines.
+                    $item->update_meta_data(self::ITEM_PLAN, (int) $plan['id']);
+                    $item->save();
+                }
                 // Automatic retries never touch items waiting for a manual check (possible paid purchase).
                 if (!empty(self::$running['cn_retry_delivery']) && ($item->get_meta(self::ITEM_MANUAL) || ($item->get_meta(self::ITEM_ERROR) !== '' && self::manual_plan($plan)))) {
                     if (!$item->get_meta(self::ITEM_MANUAL)) {
@@ -494,7 +514,7 @@ class CN_Woo {
                 self::queue_ready_mail($order_id);
             }
             // v1.2.5: mixed orders (e.g. + license products) complete once the other plugin reports its lines delivered.
-            $others_ready = $all_ours ? true : (bool) apply_filters('carunit_order_foreign_items_ready', false, $order);
+            $others_ready = $all_ours ? true : self::foreign_ready($order);
             if (!$failed && $others_ready && $order->has_status('processing') && CN_Util::setting('auto_complete', '1') === '1') {
                 $order->update_status('completed', 'ابزار شبکه: تحویل کامل شد.');
             }
@@ -757,13 +777,33 @@ class CN_Woo {
             if (!$order || !$order->is_paid() || $order->has_status(array('cancelled', 'refunded', 'failed'))) {
                 return false;
             }
-            if ($order->has_status('completed') && !self::unmailed_services($order)) {
+            if ($order->has_status('completed')) {
+                // v1.2.8: the order-completed email carries everything; never a separate "ready" email.
                 return false;
             }
             $new = self::unmailed_services($order);
             $pending = self::pending_items($order);
-            $partial = $pending && !$order->get_meta(self::ORDER_PARTIAL);
-            if (!$new && !$partial) {
+            $others_ready = self::foreign_ready($order);
+            if (!$pending && $others_ready) {
+                // v1.2.8: everything delivered -> complete; the unified completed email is the only mail.
+                if ($order->has_status('processing') && CN_Util::setting('auto_complete', '1') === '1') {
+                    $order->update_status('completed', 'ابزار شبکه: تحویل کامل شد.');
+                }
+                return false;
+            }
+            if (!$pending) {
+                // Only foreign (license) lines are waiting: still a partial-delivery mail (licenses render via cn_ready_mail_extra).
+                $pending = array();
+                $partial = !$order->get_meta(self::ORDER_PARTIAL);
+                if (!$partial) {
+                    return false;
+                }
+            }
+            if (!isset($partial)) {
+                $partial = !$order->get_meta(self::ORDER_PARTIAL);
+            }
+            // v1.2.8: only ONE in-between (partial-delivery) email per order; later success completes the order instead.
+            if (!$partial) {
                 return false;
             }
             $ids = array();
@@ -773,10 +813,8 @@ class CN_Woo {
             if ($ids) {
                 self::mark_mailed($order, $ids);
             }
-            if ($pending) {
-                $order->update_meta_data(self::ORDER_PARTIAL, 1);
-                $order->save();
-            }
+            $order->update_meta_data(self::ORDER_PARTIAL, 1);
+            $order->save();
             $sent = false;
             if (function_exists('WC') && WC()->mailer()) {
                 $emails = WC()->mailer()->get_emails();
