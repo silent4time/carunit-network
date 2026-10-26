@@ -565,7 +565,7 @@ class CN_Admin {
                 echo '<td data-label="سفارش">' . ($o ? '<a href="' . esc_url($o->get_edit_order_url()) . '">#' . esc_html($o->get_order_number()) . '</a>' : '—') . '</td>';
                 echo '<td data-label="مشتری">' . esc_html($u ? $u->display_name : 'مهمان') . '</td>';
                 echo '<td data-label="مصرف" class="cn-nw">' . esc_html(CN_Util::bytes_label($s['usage_bytes']) . ' / ' . ($s['limit_bytes'] ? CN_Util::bytes_label($s['limit_bytes']) : 'نامحدود')) . '</td>';
-                echo '<td data-label="انقضا" class="cn-nw">' . esc_html(CN_Util::date_label($s['expires_at'])) . '</td><td>' . self::badge($s['status']) . '</td>';
+                echo '<td data-label="انقضا" class="cn-nw">' . esc_html(CN_Util::expiry_label($s)) . '</td><td>' . self::badge($s['status']) . '</td>';
                 echo '<td><a class="cn-btn cn-btn--ghost" href="' . esc_url(self::url('cn-services', array('service' => $s['id']))) . '">مدیریت</a></td></tr>';
             }
             echo '</tbody></table>';
@@ -591,7 +591,7 @@ class CN_Admin {
         $kv('نام کاربری', '<code dir="ltr">' . esc_html($s['username']) . '</code>');
         $kv('وضعیت', self::badge($s['status']));
         $kv('مصرف', esc_html(CN_Util::bytes_label($s['usage_bytes']) . ' از ' . ($s['limit_bytes'] ? CN_Util::bytes_label($s['limit_bytes']) : 'نامحدود')));
-        $kv('انقضا', esc_html(CN_Util::date_label($s['expires_at'])));
+        $kv('انقضا', esc_html(CN_Util::expiry_label($s)));
         $kv('آخرین همگام‌سازی', esc_html(CN_Util::local_label($s['synced_at'])));
         if ($s['sub_url']) {
             $kv('لینک اشتراک', '<code dir="ltr" class="cn-break">' . esc_html($s['sub_url']) . '</code>');

@@ -161,7 +161,7 @@ class CN_Account {
             echo '<div class="cn-stat"><span class="cn-label">حجم</span><strong>' . esc_html($limit > 0 ? CN_Util::bytes_label($limit) : 'نامحدود') . '</strong>';
         }
         echo '</div>';
-        echo '<div class="cn-stat"><span class="cn-label">انقضا</span><strong>' . esc_html(CN_Util::date_label($svc['expires_at'])) . '</strong>';
+        echo '<div class="cn-stat"><span class="cn-label">انقضا</span><strong>' . esc_html(CN_Util::expiry_label($svc)) . '</strong>';
         if ($left !== null) {
             echo '<small>' . esc_html(CN_Util::fa_digits($left)) . ' روز مانده</small>';
         }
@@ -262,7 +262,7 @@ class CN_Account {
 
     public static function plain_service(array $svc, $renewed = false) {
         $lines = array(self::plan_name($svc) . ($renewed ? ' (تمدید شد)' : '') . ' — ' . $svc['username']);
-        $lines[] = 'حجم: ' . ($svc['limit_bytes'] > 0 ? CN_Util::bytes_label($svc['limit_bytes']) : 'نامحدود') . ' | انقضا: ' . CN_Util::date_label($svc['expires_at']);
+        $lines[] = 'حجم: ' . ($svc['limit_bytes'] > 0 ? CN_Util::bytes_label($svc['limit_bytes']) : 'نامحدود') . ' | انقضا: ' . CN_Util::expiry_label($svc);
         $guide = self::guide($svc);
         if ($guide) {
             $lines[] = $guide['button'] . ': ' . $svc['sub_url'];
@@ -310,7 +310,7 @@ class CN_Account {
         $html .= '<table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr>'
             . '<td width="50%" style="background:#F4F4F4;border-radius:8px;padding:10px 12px"><div style="color:#6E6E6E;font-size:12px">حجم</div><strong style="color:#0D0D0D">' . esc_html($svc['limit_bytes'] > 0 ? CN_Util::bytes_label($svc['limit_bytes']) : 'نامحدود') . '</strong></td>'
             . '<td width="8"></td>'
-            . '<td width="50%" style="background:#F4F4F4;border-radius:8px;padding:10px 12px"><div style="color:#6E6E6E;font-size:12px">انقضا</div><strong style="color:#0D0D0D">' . esc_html(CN_Util::date_label($svc['expires_at'])) . '</strong></td>'
+            . '<td width="50%" style="background:#F4F4F4;border-radius:8px;padding:10px 12px"><div style="color:#6E6E6E;font-size:12px">انقضا</div><strong style="color:#0D0D0D">' . esc_html(CN_Util::expiry_label($svc)) . '</strong></td>'
             . '</tr></table>';
 
         $guide = self::guide($svc);

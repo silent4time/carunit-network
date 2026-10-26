@@ -70,6 +70,28 @@ class CN_Util {
         return $mysql ? (int) strtotime($mysql . ' UTC') : 0;
     }
 
+    /** Duration label for start-on-first-use services: «۱ ماه از اولین اتصال». */
+    public static function hold_label($days) {
+        $days = (int) $days;
+        if ($days <= 0) {
+            return 'نامحدود';
+        }
+        if ($days === 31 || $days % 30 === 0) {
+            $m = $days === 31 ? 1 : intdiv($days, 30);
+            return self::fa_digits((string) $m) . ' ماه از اولین اتصال';
+        }
+        return self::fa_digits((string) $days) . ' روز از اولین اتصال';
+    }
+
+    /** Expiry text for a service row (array with status, days, expires_at). */
+    public static function expiry_label($svc) {
+        $svc = (array) $svc;
+        if (isset($svc['status']) && $svc['status'] === 'on_hold' && empty($svc['expires_at'])) {
+            return self::hold_label(isset($svc['days']) ? $svc['days'] : 0);
+        }
+        return self::date_label(isset($svc['expires_at']) ? $svc['expires_at'] : '');
+    }
+
     public static function date_label($mysql) {
         $ts = self::db_to_ts($mysql);
         if (!$ts) {

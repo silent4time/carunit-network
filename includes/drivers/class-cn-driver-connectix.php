@@ -198,13 +198,15 @@ class CN_Driver_Connectix extends CN_Driver {
         $expire = self::ts(isset($client['expire_date']) ? $client['expire_date'] : (isset($plan_row['expire_date']) ? $plan_row['expire_date'] : 0));
         $limit = array_key_exists('traffic_amount', $plan_row) ? self::bytes($plan_row['traffic_amount']) : (int) $a['bytes'];
 
+        $hold = (bool) $this->s('first_login');
         return $this->ok(array(
+            'status'   => $hold ? 'on_hold' : 'active',
             'username' => $user,
             'sub_url'  => !empty($client['subscription_link']) ? (string) $client['subscription_link'] : '',
             'configs'  => array(array('نام کاربری', $user, 'text'), array('رمز عبور', $pass, 'text')),
             'data'     => array('client_id' => $id, 'plan_id' => $plan),
             'limit'    => $limit,
-            'expire'   => $expire ? $expire : (int) $a['expire'],
+            'expire'   => $hold ? 0 : ($expire ? $expire : (int) $a['expire']),
         ));
     }
 

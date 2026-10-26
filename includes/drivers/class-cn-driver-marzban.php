@@ -205,13 +205,15 @@ class CN_Driver_Marzban extends CN_Driver {
             return $this->fail('ساخت کاربر در پنل ناموفق بود', $r);
         }
         $u = $r['json'];
+        $hold = $expire > 0 && $this->s('on_hold');
         return $this->ok(array(
+            'status'   => $hold ? 'on_hold' : 'active',
             'username' => $u['username'],
             'sub_url'  => $this->abs_url(isset($u['subscription_url']) ? $u['subscription_url'] : ''),
             'configs'  => $this->links($u),
             'data'     => array(),
             'limit'    => $limit,
-            'expire'   => $expire,
+            'expire'   => $hold ? 0 : $expire,
         ));
     }
 

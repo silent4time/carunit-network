@@ -171,6 +171,11 @@ class CN_Services {
         }
         $now = CN_DB::now();
         $exp = isset($r['expire']) ? (int) $r['expire'] : $expire;
+        // v1.2.5: start-on-first-use accounts have no calendar expiry yet.
+        $new_status = (isset($r['status']) && $r['status'] === 'on_hold') ? 'on_hold' : 'active';
+        if ($new_status === 'on_hold') {
+            $exp = 0;
+        }
         $wpdb->insert(CN_DB::t('services'), array(
             'panel_id'      => $panel['id'],
             'plan_id'       => $plan['id'],
@@ -183,7 +188,7 @@ class CN_Services {
             'volume_gb'     => $plan['volume_gb'],
             'days'          => $plan['days'],
             'expires_at'    => CN_Util::ts_to_db($exp),
-            'status'        => 'active',
+            'status'        => $new_status,
             'limit_bytes'   => isset($r['limit']) ? (int) $r['limit'] : $bytes,
             'created_at'    => $now,
             'updated_at'    => $now,
@@ -260,11 +265,13 @@ class CN_Services {
             $wpdb->update(CN_DB::t('services'), array('synced_at' => CN_DB::now()), array('id' => $svc['id']));
             return new WP_Error('cn_info', isset($r['msg']) ? $r['msg'] : 'خطا');
         }
+        $st = sanitize_key($r['status']);
         $row = array(
             'usage_bytes' => max(0, (int) $r['used']),
             'limit_bytes' => max(0, (int) $r['limit']),
-            'expires_at'  => CN_Util::ts_to_db((int) $r['expire']),
-            'status'      => sanitize_key($r['status']),
+            // on_hold: duration not started yet, keep expiry empty; once the panel reports a real expiry the status flips to active.
+            'expires_at'  => $st === 'on_hold' ? null : CN_Util::ts_to_db((int) $r['expire']),
+            'status'      => $st,
             'synced_at'   => CN_DB::now(),
         );
         if (!empty($r['sub_url'])) {

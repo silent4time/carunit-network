@@ -76,13 +76,15 @@ class CN_Driver_Marzneshin extends CN_Driver_Marzban {
             return $this->fail('ساخت کاربر در پنل ناموفق بود', $r);
         }
         $u = $r['json'];
+        $hold = $expire > 0 && $this->s('on_hold');
         return $this->ok(array(
+            'status'   => $hold ? 'on_hold' : 'active',
             'username' => $u['username'],
             'sub_url'  => $this->abs_url(isset($u['subscription_url']) ? $u['subscription_url'] : ''),
             'configs'  => array(),
             'data'     => array(),
             'limit'    => (int) $a['bytes'],
-            'expire'   => $expire,
+            'expire'   => $hold ? 0 : $expire,
         ));
     }
 

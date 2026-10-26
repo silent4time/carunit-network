@@ -259,6 +259,34 @@ class CN_Woo {
         return $product ? CN_Plans::for_product($product) : null;
     }
 
+    /**
+     * v1.2.5: true when every network line of the order is fully delivered (no error, manual check or pending retry).
+     * Used by other CarUnit plugins (license manager) to decide whether a mixed order can be completed.
+     */
+    public static function items_ready($order) {
+        $order = $order instanceof WC_Order ? $order : wc_get_order($order);
+        if (!$order) {
+            return false;
+        }
+        if ($order->get_meta(self::ORDER_FAILED)) {
+            return false;
+        }
+        foreach ($order->get_items() as $item_id => $item) {
+            if (!self::item_plan($item)) {
+                continue;
+            }
+            if ($item->get_meta(self::ITEM_MANUAL) || (string) $item->get_meta(self::ITEM_ERROR) !== '') {
+                return false;
+            }
+            $qty = max(0, (int) $item->get_quantity() + (int) $order->get_qty_refunded_for_item($item_id));
+            $done = $item->get_meta(self::ITEM_RENEW) ? (int) $item->get_meta(self::ITEM_RENEWED) : count(CN_Services::for_item($item_id));
+            if ($done < $qty) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     public static function order_has_services($order) {
         foreach ($order->get_items() as $item) {
             if (self::item_plan($item)) {
@@ -382,7 +410,9 @@ class CN_Woo {
             if ($created || $renewed) {
                 self::queue_ready_mail($order_id);
             }
-            if (!$failed && $all_ours && $order->has_status('processing') && CN_Util::setting('auto_complete', '1') === '1') {
+            // v1.2.5: mixed orders (e.g. + license products) complete once the other plugin reports its lines delivered.
+            $others_ready = $all_ours ? true : (bool) apply_filters('carunit_order_foreign_items_ready', false, $order);
+            if (!$failed && $others_ready && $order->has_status('processing') && CN_Util::setting('auto_complete', '1') === '1') {
                 $order->update_status('completed', 'ابزار شبکه: تحویل کامل شد.');
             }
         } finally {
