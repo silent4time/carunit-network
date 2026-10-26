@@ -185,6 +185,30 @@ abstract class CN_Driver {
      */
     protected function proxy_via_polban($method, $target_url, array $o, $polban_url, $polban_key) {
         $headers = isset($o['headers']) ? $o['headers'] : array();
+        // Mirror CN_Http::request(): bearer/auth/cookies only become headers there,
+        // so they must be added here or Polban forwards the request without them.
+        if (!isset($headers['Accept'])) {
+            $headers['Accept'] = 'application/json';
+        }
+        if (!empty($o['bearer'])) {
+            $headers['Authorization'] = 'Bearer ' . $o['bearer'];
+        }
+        if (!empty($o['auth'])) {
+            $headers['Authorization'] = 'Basic ' . base64_encode($o['auth'][0] . ':' . $o['auth'][1]);
+        }
+        if (!empty($o['cookies']) && !isset($headers['Cookie'])) {
+            $pairs = array();
+            foreach ((array) $o['cookies'] as $name => $value) {
+                if (is_object($value) && isset($value->name)) {
+                    $pairs[] = $value->name . '=' . $value->value;
+                } elseif (!is_object($value)) {
+                    $pairs[] = $name . '=' . $value;
+                }
+            }
+            if ($pairs) {
+                $headers['Cookie'] = implode('; ', $pairs);
+            }
+        }
         $body = null;
         if (array_key_exists('json', $o)) {
             $body = wp_json_encode($o['json']);
