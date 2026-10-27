@@ -84,6 +84,8 @@ class CN_Services {
             'data'        => $svc['data'],
             'limit_bytes' => $svc['limit_bytes'],
             'expires_at'  => $svc['expires_at'],
+            'status'      => isset($svc['status']) ? $svc['status'] : '',
+            'days'        => isset($svc['days']) ? $svc['days'] : 0,
         );
     }
 

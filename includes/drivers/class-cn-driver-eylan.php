@@ -39,6 +39,7 @@ class CN_Driver_Eylan extends CN_Driver {
             'max_clients' => array('label' => 'کاربر همزمان (وقتی کاربر نمونه ندارید)', 'type' => 'number', 'default' => '1', 'help' => '۰ = نامحدود', 'advanced' => true),
             'public_base' => array('label' => 'آدرس عمومی برای مشتری', 'type' => 'url', 'advanced' => true, 'help' => 'اگر آدرس API با آدرسی که مشتری باز می‌کند فرق دارد، مثل http://panel.example.com:8050'),
             'server_host' => array('label' => 'آدرس سرور برای L2TP/Cisco', 'type' => 'text', 'advanced' => true, 'help' => 'خالی = دامنهٔ پنل'),
+            'activation'  => array('label' => 'شروع زمان سرویس', 'type' => 'select', 'options' => array('first_use' => 'از اولین اتصال مشتری', 'fixed' => 'از لحظهٔ خرید (تاریخ ثابت)'), 'default' => 'first_use', 'help' => 'از اولین اتصال = activation_type=flexible_days در پنل ایلان؛ ایمیل و حساب کاربری «N روز از اولین اتصال» نشان می‌دهند.'),
             'l2tp_psk'    => array('label' => 'کلید مشترک L2TP (PSK)', 'type' => 'text', 'default' => '123456', 'advanced' => true, 'help' => 'وقتی پنل کلید را برنگرداند، همین به مشتری داده می‌شود.'),
         ) + CN_Drivers::common_fields();
     }
@@ -249,7 +250,12 @@ class CN_Driver_Eylan extends CN_Driver {
             'activation_type' => 'fixed_date',
         ) + $flags;
         $days = self::days((int) $a['expire']);
-        if ($days > 0) {
+        // v1.2.9: start-on-first-connection (panel's flexible_days); exact plan days, not a rounded diff.
+        $hold = $this->first_use() && $days > 0;
+        if ($hold) {
+            $body['activation_type'] = 'flexible_days';
+            $body['pending_activation_days'] = isset($a['days']) && (int) $a['days'] > 0 ? (int) $a['days'] : $days;
+        } elseif ($days > 0) {
             $body['expiry_days'] = $days;
         }
         $secret = array();
@@ -276,8 +282,14 @@ class CN_Driver_Eylan extends CN_Driver {
             'configs'  => $this->delivery($a['username'], $flags, $secret),
             'data'     => array('protocol' => $protocol, 'flags' => $flags),
             'limit'    => (int) $a['bytes'],
-            'expire'   => (int) $a['expire'],
+            'status'   => $hold ? 'on_hold' : 'active',
+            'expire'   => $hold ? 0 : (int) $a['expire'],
         ));
+    }
+
+    /** v1.2.9: panel setting «شروع زمان سرویس»; default = from first connection. */
+    protected function first_use() {
+        return $this->s('activation', 'first_use') !== 'fixed';
     }
 
     protected function sub_url($username) {
@@ -418,6 +430,14 @@ class CN_Driver_Eylan extends CN_Driver {
             $status = 'limited';
         } else {
             $status = 'active';
+        }
+        // v1.2.9: flexible_days user not connected yet -> no calendar expiry, keep on_hold.
+        if ($status === 'active' && !$expire) {
+            $flex = isset($u['activation_type']) && $u['activation_type'] === 'flexible_days';
+            $was_hold = isset($svc['status']) && $svc['status'] === 'on_hold' && $used <= 0;
+            if ($flex || $was_hold) {
+                $status = 'on_hold';
+            }
         }
         return $this->ok(array(
             'status'  => $status,
