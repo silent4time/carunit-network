@@ -113,4 +113,37 @@
       });
     });
   }
+
+  // Dedicated AJAX test
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-cn-test]');
+    if (!btn) return;
+    e.preventDefault();
+    var id = btn.getAttribute('data-cn-test');
+    var cell = btn.closest('tr') ? btn.closest('tr').querySelector('.cn-test-result') : null;
+    btn.disabled = true;
+    var orig = btn.textContent;
+    btn.textContent = 'در حال تست...';
+    var fd = new FormData();
+    fd.append('action', 'cn_ajax_test_panel');
+    fd.append('id', id);
+    fd.append('_wpnonce', nonce);
+    fetch(ajaxurl, { method: 'POST', body: fd, credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        btn.disabled = false;
+        btn.textContent = orig;
+        if (cell) {
+          cell.innerHTML = res.success
+            ? '<span class="cn-badge cn-badge--ok">موفق</span> <span class="cn-muted">' + (res.data && res.data.msg ? res.data.msg : '') + '</span>'
+            : '<span class="cn-badge cn-badge--off">خطا</span> <span class="cn-muted">' + (res.data && res.data.msg ? res.data.msg : 'ناموفق') + '</span>';
+        }
+      })
+      .catch(function () {
+        btn.disabled = false;
+        btn.textContent = orig;
+        if (cell) cell.innerHTML = '<span class="cn-badge cn-badge--off">خطا</span>';
+      });
+  });
+
 })();
