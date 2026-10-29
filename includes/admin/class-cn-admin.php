@@ -12,6 +12,7 @@ class CN_Admin {
         foreach (array('save_panel', 'delete_panel', 'test_panel', 'save_plan', 'delete_plan', 'create_product', 'service_action', 'stock_add', 'stock_delete', 'save_settings', 'import_plans') as $a) {
             add_action('admin_post_cn_' . $a, array(__CLASS__, 'post_' . $a));
         }
+        add_action('wp_ajax_cn_ajax_test_panel', array(__CLASS__, 'ajax_test_panel'));
     }
 
     public static function menu() {
@@ -36,6 +37,10 @@ class CN_Admin {
         }
         wp_enqueue_style('cn-admin', CN_URL . 'assets/admin.css', array(), CN_VERSION);
         wp_enqueue_script('cn-admin', CN_URL . 'assets/admin.js', array(), CN_VERSION, true);
+        wp_localize_script('cn-admin', 'cnAdmin', array(
+            'ajaxurl' => admin_url('admin-ajax.php'),
+            'nonce'   => wp_create_nonce('cn_ajax'),
+        ));
     }
 
     /* ---------- helpers ---------- */
@@ -199,7 +204,7 @@ class CN_Admin {
             self::remote_plans((int) $_GET['remote']);
             return;
         }
-        self::open('پنل‌ها', '<a class="cn-btn cn-btn--primary" href="' . esc_url(self::url('cn-panels', array('edit' => 'new'))) . '">افزودن پنل</a>');
+        self::open('پنل‌ها', '<a class="cn-btn cn-btn--ghost" href="#" data-cn-test-all>تست اتصال همه</a> <a class="cn-btn cn-btn--primary" href="' . esc_url(self::url('cn-panels', array('edit' => 'new'))) . '">افزودن پنل</a>');
         $panels = CN_Panels::all();
         if (!$panels) {
             echo '<div class="cn-box cn-empty"><p>هنوز پنلی اضافه نشده است. از دکمهٔ «افزودن پنل» شروع کنید.</p></div>';
@@ -217,7 +222,7 @@ class CN_Admin {
                 echo '<span class="cn-muted">تست نشده</span>';
             }
             echo '</td><td class="cn-actions">';
-            echo '<a class="cn-btn cn-btn--ghost" href="' . esc_url(self::action_url('test_panel', array('id' => $p['id']))) . '">تست اتصال</a>';
+            echo '<a class="cn-btn cn-btn--ghost" href="#" data-cn-test="' . (int) $p['id'] . '">تست اتصال</a>';
             if ($p['type'] === 'connectix') {
                 echo '<a class="cn-btn cn-btn--ghost" href="' . esc_url(self::url('cn-panels', array('remote' => $p['id']))) . '">دریافت پلن‌ها</a>';
             }
@@ -758,4 +763,18 @@ class CN_Admin {
         echo '</tbody></table></div>';
         self::close();
     }
+
+    public static function ajax_test_panel() {
+        check_ajax_referer('cn_ajax');
+        if (!current_user_can(self::CAP)) {
+            wp_send_json_error(array('msg' => 'دسترسی ندارید'));
+        }
+        $id = isset($_POST['id']) ? (int) $_POST['id'] : 0;
+        $r = CN_Panels::test($id);
+        if (!empty($r['ok'])) {
+            wp_send_json_success(array('msg' => isset($r['msg']) ? $r['msg'] : 'موفق'));
+        }
+        wp_send_json_error(array('msg' => isset($r['msg']) ? $r['msg'] : 'ناموفق'));
+    }
+
 }

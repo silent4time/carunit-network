@@ -32,4 +32,52 @@
     panelSel.addEventListener('change', sync);
     sync();
   }
+
+  // AJAX test single panel
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-cn-test]');
+    if (!btn) return;
+    e.preventDefault();
+    var id = btn.getAttribute('data-cn-test');
+    var cell = btn.closest('tr').querySelector('.cn-test-result');
+    btn.disabled = true;
+    btn.textContent = 'در حال تست...';
+    var fd = new FormData();
+    fd.append('action', 'cn_ajax_test_panel');
+    fd.append('id', id);
+    fd.append('_wpnonce', cnAdmin.nonce);
+    fetch(cnAdmin.ajaxurl, { method: 'POST', body: fd, credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        btn.disabled = false;
+        btn.textContent = 'تست اتصال';
+        if (cell) {
+          cell.innerHTML = res.success
+            ? '<span class="cn-badge cn-badge--ok">موفق</span> <span class="cn-muted">' + (res.data.msg || '') + '</span>'
+            : '<span class="cn-badge cn-badge--off">خطا</span> <span class="cn-muted">' + (res.data.msg || 'ناموفق') + '</span>';
+        }
+      })
+      .catch(function () {
+        btn.disabled = false;
+        btn.textContent = 'تست اتصال';
+        if (cell) cell.innerHTML = '<span class="cn-badge cn-badge--off">خطا</span>';
+      });
+  });
+
+  // AJAX test all panels
+  var testAll = document.querySelector('[data-cn-test-all]');
+  if (testAll) {
+    testAll.addEventListener('click', function (e) {
+      e.preventDefault();
+      var buttons = document.querySelectorAll('[data-cn-test]');
+      var i = 0;
+      function next() {
+        if (i >= buttons.length) return;
+        buttons[i].click();
+        i++;
+        setTimeout(next, 800);
+      }
+      next();
+    });
+  }
 })();
