@@ -109,11 +109,55 @@ class CN_Panels {
         );
         if ($id) {
             $wpdb->update(CN_DB::t('panels'), $row, array('id' => (int) $id));
-            return (int) $id;
+            $saved_id = (int) $id;
+        } else {
+            $row['created_at'] = CN_DB::now();
+            $wpdb->insert(CN_DB::t('panels'), $row);
+            $saved_id = (int) $wpdb->insert_id;
         }
-        $row['created_at'] = CN_DB::now();
-        $wpdb->insert(CN_DB::t('panels'), $row);
-        return (int) $wpdb->insert_id;
+
+        // Auto-add origin to Polban allowlist if use_polban is enabled
+        if (!empty($settings['use_polban']) && $url !== '') {
+            self::add_to_polban_allowlist($url);
+        }
+
+        return $saved_id;
+    }
+
+    private static function add_to_polban_allowlist($panel_url) {
+        $polban_url = rtrim(get_option('cn_polban_url', ''), '/');
+        $polban_key = get_option('cn_polban_key', '');
+        if (!$polban_url || !$polban_key) {
+            return;
+        }
+        $origin = self::extract_origin($panel_url);
+        if ($origin === '') {
+            return;
+        }
+        $res = CN_Http::request('POST', $polban_url . '/v1/allowlist', array(
+            'headers' => array(
+                'X-Polban-Key' => $polban_key,
+                'Content-Type' => 'application/json',
+            ),
+            'json' => array('origin' => $origin),
+            'timeout' => 15,
+            'verify' => true,
+        ));
+        if (empty($res['ok'])) {
+            CN_Util::log('افزودن مبدأ به پل‌بان ناموفق: ' . (isset($res['error']) ? $res['error'] : ''), array(), 'error');
+        }
+    }
+
+    private static function extract_origin($url) {
+        $p = wp_parse_url($url);
+        if (empty($p['scheme']) || empty($p['host'])) {
+            return '';
+        }
+        $o = strtolower($p['scheme']) . '://' . strtolower($p['host']);
+        if (!empty($p['port'])) {
+            $o .= ':' . (int) $p['port'];
+        }
+        return $o;
     }
 
     public static function is_json_field($key, array $f) {
@@ -156,3 +200,4 @@ class CN_Panels {
         return $r;
     }
 }
+
