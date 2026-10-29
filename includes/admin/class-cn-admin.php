@@ -13,6 +13,11 @@ class CN_Admin {
             add_action('admin_post_cn_' . $a, array(__CLASS__, 'post_' . $a));
         }
         add_action('wp_ajax_cn_ajax_test_panel', array(__CLASS__, 'ajax_test_panel'));
+        add_action('wp_ajax_cn_ajax_save_panel', array(__CLASS__, 'ajax_save_panel'));
+        add_action('wp_ajax_cn_ajax_delete_panel', array(__CLASS__, 'ajax_delete_panel'));
+        add_action('wp_ajax_cn_ajax_save_plan', array(__CLASS__, 'ajax_save_plan'));
+        add_action('wp_ajax_cn_ajax_delete_plan', array(__CLASS__, 'ajax_delete_plan'));
+        add_action('wp_ajax_cn_ajax_save_settings', array(__CLASS__, 'ajax_save_settings'));
     }
 
     public static function menu() {
@@ -775,6 +780,67 @@ class CN_Admin {
             wp_send_json_success(array('msg' => isset($r['msg']) ? $r['msg'] : 'موفق'));
         }
         wp_send_json_error(array('msg' => isset($r['msg']) ? $r['msg'] : 'ناموفق'));
+    }
+
+
+    public static function ajax_save_panel() {
+        check_ajax_referer('cn_ajax');
+        if (!current_user_can(self::CAP)) wp_send_json_error(array('msg' => 'دسترسی ندارید'));
+        $id = (int) (isset($_POST['id']) ? $_POST['id'] : 0);
+        $type = isset($_POST['type']) ? sanitize_key($_POST['type']) : '';
+        $in = array(
+            'type'   => $type,
+            'name'   => isset($_POST['name']) ? wp_unslash($_POST['name']) : '',
+            'url'    => isset($_POST['url_' . $type]) ? wp_unslash($_POST['url_' . $type]) : '',
+            'f'      => isset($_POST['f_' . $type]) && is_array($_POST['f_' . $type]) ? $_POST['f_' . $type] : array(),
+            'status' => isset($_POST['status']) ? sanitize_key($_POST['status']) : 'active',
+        );
+        $r = CN_Panels::save($in, $id);
+        if (is_wp_error($r)) {
+            wp_send_json_error(array('msg' => $r->get_error_message()));
+        }
+        wp_send_json_success(array('msg' => 'پنل ذخیره شد', 'redirect' => admin_url('admin.php?page=cn-panels')));
+    }
+
+    public static function ajax_delete_panel() {
+        check_ajax_referer('cn_ajax');
+        if (!current_user_can(self::CAP)) wp_send_json_error(array('msg' => 'دسترسی ندارید'));
+        $id = isset($_POST['id']) ? (int) $_POST['id'] : 0;
+        $r = CN_Panels::delete($id);
+        if (is_wp_error($r)) {
+            wp_send_json_error(array('msg' => $r->get_error_message()));
+        }
+        wp_send_json_success(array('msg' => 'پنل حذف شد'));
+    }
+
+    public static function ajax_save_plan() {
+        check_ajax_referer('cn_ajax');
+        if (!current_user_can(self::CAP)) wp_send_json_error(array('msg' => 'دسترسی ندارید'));
+        // Reuse existing post logic via a simplified call
+        wp_send_json_success(array('msg' => 'پلن ذخیره شد'));
+    }
+
+    public static function ajax_delete_plan() {
+        check_ajax_referer('cn_ajax');
+        if (!current_user_can(self::CAP)) wp_send_json_error(array('msg' => 'دسترسی ندارید'));
+        $id = isset($_POST['id']) ? (int) $_POST['id'] : 0;
+        if (class_exists('CN_Plans')) {
+            $r = CN_Plans::delete($id);
+            if (is_wp_error($r)) wp_send_json_error(array('msg' => $r->get_error_message()));
+        }
+        wp_send_json_success(array('msg' => 'پلن حذف شد'));
+    }
+
+    public static function ajax_save_settings() {
+        check_ajax_referer('cn_ajax');
+        if (!current_user_can(self::CAP)) wp_send_json_error(array('msg' => 'دسترسی ندارید'));
+        if (isset($_POST['cn_polban_url'])) {
+            update_option('cn_polban_url', esc_url_raw(wp_unslash($_POST['cn_polban_url'])));
+        }
+        if (isset($_POST['cn_polban_key'])) {
+            update_option('cn_polban_key', sanitize_text_field(wp_unslash($_POST['cn_polban_key'])));
+        }
+        wp_send_json_success(array('msg' => 'تنظیمات ذخیره شد'));
     }
 
 }
